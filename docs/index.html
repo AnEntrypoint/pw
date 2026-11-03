@@ -118,7 +118,7 @@ footer { border-top: 4px solid #000; margin-top: 2.4em; padding-top: 0.5em; font
 <h2>3. What the install does</h2>
 <ul>
   <li>add-mcp writes an MCP entry named <code>playwriter</code>. Its command is <code>npx -y github:AnEntrypoint/pw</code>.</li>
-  <li>npx fetches this repo, installs its one dependency (playwriter 0.9.0), and runs the bin <code>playwriter-project</code>.</li>
+  <li>npx fetches this repo, installs its one dependency (playwriter 0.9.0), and runs the bin <code>playwriter-project</code>. The first run takes about 40 seconds for that.</li>
   <li>The first tool call starts the gate for the project. The gate starts Chrome when a request arrives.</li>
 </ul>
 </section>
@@ -214,7 +214,7 @@ footer { border-top: 4px solid #000; margin-top: 2.4em; padding-top: 0.5em; font
 <p>If an agent still runs an older copy, npx has kept it in its cache. Delete the npx cache, then start the agent again:</p>
 <pre>rm -rf ~/.npm/_npx</pre>
 <h3>Pin a version</h3>
-<p>Put a tag in the spec. The tag exists once the repository is tagged:</p>
+<p>Put a tag in the spec. v0.1.0 is the first tag:</p>
 <pre>npx -y add-mcp "npx -y github:AnEntrypoint/pw#v0.1.0" -n playwriter --all -g -y</pre>
 <h3>Remove</h3>
 <pre>npx -y add-mcp remove playwriter -g -y</pre>
