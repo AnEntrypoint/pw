@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pw: manual</title>
+<style>
+@page { size: A4; margin: 20mm 18mm 22mm 18mm; }
+html { background: #fff; color: #000; }
+body {
+  font-family: "Liberation Mono", "Courier New", Courier, monospace;
+  font-size: 11pt;
+  line-height: 1.45;
+  max-width: 48em;
+  margin: 2em auto;
+  padding: 0 1.2em;
+}
+h1 {
+  font-size: 2.6em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-top: 8px solid #000;
+  border-bottom: 8px solid #000;
+  padding: 0.25em 0;
+  margin: 0 0 0.5em 0;
+}
+.sub { font-size: 1.05em; margin: 0 0 2em 0; }
+h2 {
+  font-size: 1.45em;
+  text-transform: uppercase;
+  border-bottom: 4px solid #000;
+  padding-bottom: 0.15em;
+  margin: 1.6em 0 0.7em 0;
+}
+h3 { font-size: 1.05em; text-transform: uppercase; margin: 1.2em 0 0.4em 0; }
+p, li { margin: 0.45em 0; }
+ul, ol { padding-left: 1.6em; }
+pre {
+  border: 2px solid #000;
+  padding: 0.7em 0.8em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0.8em 0;
+  font-size: 0.95em;
+}
+code { font-family: inherit; font-weight: bold; }
+pre code { font-weight: normal; }
+table { border-collapse: collapse; width: 100%; margin: 0.8em 0; }
+th, td { border: 2px solid #000; padding: 0.35em 0.5em; text-align: left; vertical-align: top; }
+th { text-transform: uppercase; }
+a { color: #000; }
+nav ol { list-style: none; padding-left: 0; }
+nav li { border-bottom: 1px solid #000; padding: 0.3em 0; }
+.note { border-left: 8px solid #000; padding-left: 0.8em; margin: 0.9em 0; }
+footer { border-top: 4px solid #000; margin-top: 2.4em; padding-top: 0.5em; font-size: 0.9em; }
+
+@media print {
+  body { max-width: none; margin: 0; padding: 0; font-size: 10pt; line-height: 1.38; }
+  h1 { font-size: 2.1em; }
+  h2 { font-size: 1.25em; }
+  section.chapter { page-break-before: always; }
+  h2, h3 { page-break-after: avoid; }
+  pre, table, .note { page-break-inside: avoid; }
+  nav { page-break-after: always; }
+  a[href^="http"]::after { content: " <" attr(href) ">"; font-size: 85%; }
+  footer { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<h1>pw</h1>
+<p class="sub">Manual. playwriter with one Chrome profile per project, started on first use and stopped after idle.</p>
+
+<nav>
+<h3>Contents</h3>
+<ol>
+  <li>1. What it is</li>
+  <li>2. Install</li>
+  <li>3. What the install does</li>
+  <li>4. Modes</li>
+  <li>5. Lifecycle and idle stop</li>
+  <li>6. Files</li>
+  <li>7. Environment</li>
+  <li>8. Limits</li>
+  <li>9. Troubleshooting</li>
+  <li>10. Update and remove</li>
+</ol>
+</nav>
+
+<section class="chapter" id="ch-1">
+<h2>1. What it is</h2>
+<p>pw installs playwriter 0.9.0, the npm package from remorses/playwriter, and gives each project its own Chrome profile.</p>
+<p>The browser does not start at agent start. It starts on the first tool call or CLI command. It stops after 5 minutes with no traffic. The idle time is set by <code>PLAYWRITER_IDLE_MS</code>, which defaults to 300000 milliseconds.</p>
+<p>A stop is a clean <code>Browser.close</code>, so cookies are flushed. The profile is kept at <code>&lt;project&gt;/.playwriter/browser-profile</code>.</p>
+</section>
+
+<section class="chapter" id="ch-2">
+<h2>2. Install</h2>
+<p>You need git, Node 22 or later, and a Chrome or Chromium. git is needed because npm fetches the GitHub package. If no browser is found on first use, the gate runs <code>playwriter browser install</code>, which downloads Chrome for Testing into <code>~/.playwriter/browsers</code>.</p>
+<p>There is one install command. It needs only add-mcp, which runs through npx:</p>
+<pre>npx -y add-mcp "npx -y github:AnEntrypoint/pw" -n playwriter --all -g -y</pre>
+<p><code>-g</code> is user level. <code>--all</code> writes into every agent add-mcp supports. For one agent only, use <code>-a claude-code</code> instead of <code>--all</code>.</p>
+<p>add-mcp takes the quoted command string, so it runs <code>npx -y github:AnEntrypoint/pw</code> for each agent.</p>
+<h3>Options</h3>
+<p>Options go through add-mcp, after the install command:</p>
+<table>
+<tr><th>Option</th><th>Use</th></tr>
+<tr><td><code>--env PLAYWRITER_NO_SANDBOX=1</code></td><td>Needed in Linux containers, where Chromium's sandbox is blocked.</td></tr>
+<tr><td><code>--env PLAYWRITER_IDLE_MS=600000</code></td><td>Changes the idle time, in milliseconds. This value is 10 minutes.</td></tr>
+<tr><td><code>--env PLAYWRITER_TELEMETRY=0</code></td><td>The relay sends anonymous usage stats (version, OS, arch, command counts; no code, URLs or page data) by default. This turns that off.</td></tr>
+</table>
+<pre>npx -y add-mcp "npx -y github:AnEntrypoint/pw" -n playwriter --all -g -y --env PLAYWRITER_NO_SANDBOX=1</pre>
+<p class="note">The sandbox is a security layer of Chromium. Set PLAYWRITER_NO_SANDBOX=1 only where the sandbox is blocked.</p>
+</section>
+
+<section class="chapter" id="ch-3">
+<h2>3. What the install does</h2>
+<ul>
+  <li>add-mcp writes an MCP entry named <code>playwriter</code>. Its command is <code>npx -y github:AnEntrypoint/pw</code>.</li>
+  <li>npx fetches this repo, installs its one dependency (playwriter 0.9.0), and runs the bin <code>playwriter-project</code>.</li>
+  <li>The first tool call starts the gate for the project. The gate starts Chrome when a request arrives.</li>
+</ul>
+</section>
+
+<section class="chapter" id="ch-4">
+<h2>4. Modes</h2>
+<p><code>playwriter-project</code> has these modes:</p>
+<table>
+<tr><th>Arguments</th><th>Mode</th></tr>
+<tr><td>none</td><td>MCP server bound to this project's browser. Agents run this mode. Use it in <code>.mcp.json</code>.</td></tr>
+<tr><td><code>start</code></td><td>Open this project's browser now. It also opens on first use.</td></tr>
+<tr><td><code>session</code> [flags]</td><td>Create a CLI session bound to this project's browser.</td></tr>
+<tr><td><code>help</code></td><td>Print the usage.</td></tr>
+<tr><td>any other arguments</td><td>Run <code>playwriter &lt;args&gt;</code> bound to this project's browser.</td></tr>
+</table>
+<p>MCP mode connects straight to the gate. It does not use the relay.</p>
+<p>CLI commands are different. A CLI session is held by playwriter's relay, which listens on port 19988, starts on demand, and is shared by every playwriter CLI user on the machine. The relay reaches Chrome through this project's gate, because <code>session</code> passes the gate address to playwriter as <code>--direct</code>.</p>
+</section>
+
+<section class="chapter" id="ch-5">
+<h2>5. Lifecycle and idle stop</h2>
+<ul>
+  <li>There is one gate process per project. It listens on 127.0.0.1 only, on the port in <code>.playwriter/port</code> (range 9400-9899).</li>
+  <li>Chrome debugs on 127.0.0.1 at the port in <code>.playwriter/debug-port</code> (range 9900-10399).</li>
+  <li>When a request arrives and no browser is up, the gate starts Chrome on the profile.</li>
+  <li>When nothing has come through for the idle time, the gate closes Chrome.</li>
+  <li>The gate exits after the idle time with no agent attached (an MCP session or a CLI command is running) and the browser stopped. The next tool call starts everything again on the same profile.</li>
+</ul>
+<h3>What an idle stop changes</h3>
+<ul>
+  <li>Tabs are closed on an idle stop. Open the page again in the next call.</li>
+  <li>Cookies with no expiry (session cookies) do not survive a stop. Persistent cookies and the profile do.</li>
+</ul>
+<p class="note">A pause longer than the idle time closes the browser. Its tabs close with it.</p>
+</section>
+
+<section class="chapter" id="ch-6">
+<h2>6. Files</h2>
+<table>
+<tr><th>Path</th><th>What it is</th></tr>
+<tr><td>.playwriter/browser-profile/</td><td>The Chrome profile, with cookies and logins.</td></tr>
+<tr><td>.playwriter/port</td><td>The gate port, in the range 9400-9899.</td></tr>
+<tr><td>.playwriter/debug-port</td><td>The Chrome debug port, in the range 9900-10399.</td></tr>
+<tr><td>.playwriter/gate.log</td><td>Gate events: starts, browser starts and stops, and exit.</td></tr>
+<tr><td>.playwriter/browser.log</td><td>Output of Chrome and of <code>playwriter browser install</code>.</td></tr>
+</table>
+<p>Add <code>.playwriter/</code> to the project's <code>.gitignore</code>. The folder holds the profile, with its cookies and logins.</p>
+</section>
+
+<section class="chapter" id="ch-7">
+<h2>7. Environment</h2>
+<table>
+<tr><th>Variable</th><th>Use</th></tr>
+<tr><td><code>PLAYWRITER_PROJECT_DIR</code></td><td>Project root. The default is the current directory.</td></tr>
+<tr><td><code>PLAYWRITER_BROWSER_PATH</code></td><td>Browser binary to start.</td></tr>
+<tr><td><code>PLAYWRITER_NO_SANDBOX=1</code></td><td>Passes <code>--no-sandbox</code> to Chrome.</td></tr>
+<tr><td><code>PLAYWRITER_IDLE_MS</code></td><td>Idle time in milliseconds. The default is 300000.</td></tr>
+<tr><td><code>PLAYWRITER_TELEMETRY=0</code></td><td>Turns off the relay's telemetry. <code>DO_NOT_TRACK=1</code> also works. The relay reads it when it starts.</td></tr>
+</table>
+<h3>Headed or headless</h3>
+<p>On Linux, the browser is headless when neither DISPLAY nor WAYLAND_DISPLAY is set. Otherwise it is headed.</p>
+</section>
+
+<section class="chapter" id="ch-8">
+<h2>8. Limits</h2>
+<ul>
+  <li>Windows and macOS are not tested.</li>
+  <li>Concurrent agents in one project share one gate and one browser. That is not stress-tested.</li>
+  <li>A project moved to another path keeps its profile, because the profile is inside the folder. It gets a new gate and debug port only if the port files are missing.</li>
+</ul>
+<p class="note">The debug port is open on 127.0.0.1 with no authentication. Any local process can drive the browser.</p>
+</section>
+
+<section class="chapter" id="ch-9">
+<h2>9. Troubleshooting</h2>
+<p>Errors from the wrapper print to stderr, as <code>playwriter-project: error:</code> followed by the message. A browser start failure is not printed by the gate. The gate answers the failed request with HTTP 503, and the message is the body of that answer, so the agent sees it as the tool error. gate.log does not record it.</p>
+<table>
+<tr><th>Message</th><th>What to do</th></tr>
+<tr><td>playwriter-project: playwriter is not installed next to this package. Run npm install in the package folder.</td><td>Run npm install in the package folder, or reinstall with add-mcp.</td></tr>
+<tr><td>browser refused to start: no usable sandbox. Set PLAYWRITER_NO_SANDBOX=1 and restart the agent (manual, chapter 9).</td><td>Add <code>--env PLAYWRITER_NO_SANDBOX=1</code> to the add-mcp command, then run it again.</td></tr>
+<tr><td>browser did not open debug port N; see .playwriter/browser.log</td><td>Read browser.log. The message gives the full path of that file.</td></tr>
+<tr><td>browser install failed (exit N); see .playwriter/browser.log</td><td>Check the network. Then run <code>playwriter-project start</code> to retry.</td></tr>
+<tr><td>no free port in 9400-9899</td><td>Another program holds the range. Free a port, or delete <code>.playwriter/port</code> in that project to pick another.</td></tr>
+<tr><td>no free port in 9900-10399</td><td>Another program holds the debug range. Free a port, or delete <code>.playwriter/debug-port</code> in that project to pick another.</td></tr>
+<tr><td>gate did not start on port N; see .playwriter/gate.log</td><td>Read gate.log. The message gives the full path of that file.</td></tr>
+<tr><td>playwriter-project: error: ...</td><td>Read the message. gate.log is the record.</td></tr>
+</table>
+</section>
+
+<section class="chapter" id="ch-10">
+<h2>10. Update and remove</h2>
+<h3>Update</h3>
+<p>If an agent still runs an older copy, npx has kept it in its cache. Delete the npx cache, then start the agent again:</p>
+<pre>rm -rf ~/.npm/_npx</pre>
+<h3>Pin a version</h3>
+<p>Put a tag in the spec. The tag exists once the repository is tagged:</p>
+<pre>npx -y add-mcp "npx -y github:AnEntrypoint/pw#v0.1.0" -n playwriter --all -g -y</pre>
+<h3>Remove</h3>
+<pre>npx -y add-mcp remove playwriter -g -y</pre>
+<p>That command removes the entry from the global configs. Delete each project's <code>.playwriter/</code> folder to drop its profile. Both steps are optional.</p>
+<p>Outside the project folder, the install writes the agent configs that add-mcp edits, the npx cache, <code>~/.playwriter/browsers</code> when a browser is installed on first use, and <code>~/.playwriter/telemetry-id</code> unless telemetry is off.</p>
+</section>
+
+<footer>
+<p>pw manual. The source is the repository at AnEntrypoint/pw. The install command names the revision: the default branch, or a tag when one is given.</p>
+</footer>
+
+</body>
+</html>

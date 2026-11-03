@@ -1,0 +1,18 @@
+{
+  "name": "pw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "playwriter with one Chrome profile per project, started on first use and stopped after idle.",
+  "bin": {
+    "playwriter-project": "bin/playwriter-project"
+  },
+  "scripts": {
+    "test": "node test/lifecycle.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwriter": "0.9.0"
+  }
+}

@@ -1,0 +1,388 @@
+#!/usr/bin/env node
+const fs = require('node:fs');
+const net = require('node:net');
+const http = require('node:http');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
+const { spawn } = require('node:child_process');
+
+let PLAYWRITER_DIR;
+try {
+  PLAYWRITER_DIR = path.dirname(require.resolve('playwriter/package.json'));
+} catch {
+  console.error('playwriter-project: playwriter is not installed next to this package. Run npm install in the package folder.');
+  process.exit(1);
+}
+const PLAYWRITER_BIN = path.join(PLAYWRITER_DIR, 'bin.js');
+
+const HOST = '127.0.0.1';
+const PROJECT = path.resolve(process.env.PLAYWRITER_PROJECT_DIR || process.cwd());
+const STATE = path.join(PROJECT, '.playwriter');
+const PROFILE = path.join(STATE, 'browser-profile');
+const GATE_LOG = path.join(STATE, 'gate.log');
+const BROWSER_LOG = path.join(STATE, 'browser.log');
+const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
+const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
+
+const USAGE = [
+  'usage: playwriter-project [start | session [flags] | help | playwriter-args...]',
+  '  (no args)  playwriter MCP server bound to this project browser (use in .mcp.json)',
+  '  start      open this project browser now; it also opens on first use',
+  '  session    create a CLI session bound to this project browser',
+  '  <args>     run `playwriter <args>` bound to this project browser',
+  'install:    npx -y add-mcp "npx -y github:AnEntrypoint/pw" -n playwriter --all -g -y',
+  'env:        PLAYWRITER_PROJECT_DIR (default cwd), PLAYWRITER_BROWSER_PATH, PLAYWRITER_NO_SANDBOX=1,',
+  `            PLAYWRITER_IDLE_MS (default ${IDLE_MS}: browser stops after this long with no traffic)`,
+].join('\n');
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const log = (line) => fs.appendFileSync(GATE_LOG, `${new Date().toISOString()} ${line}\n`);
+const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, ...options });
+
+function httpOk(port, urlPath, timeout = 3000) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: HOST, port, path: urlPath, timeout }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+async function waitFor(check, ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await check()) return true;
+    await sleep(200);
+  }
+  return false;
+}
+
+function portFree(port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(port, HOST, () => probe.close(() => resolve(true)));
+  });
+}
+
+async function pickPort(base, span, offset) {
+  for (let i = 0; i < span; i++) {
+    const port = base + ((offset + i) % span);
+    if (await portFree(port)) return port;
+  }
+  throw new Error(`no free port in ${base}-${base + span - 1}`);
+}
+
+async function loadPorts() {
+  fs.mkdirSync(STATE, { recursive: true });
+  const read = (name) => {
+    try {
+      return Number(fs.readFileSync(path.join(STATE, name), 'utf8')) || 0;
+    } catch {
+      return 0;
+    }
+  };
+  let gate = read('port');
+  let debug = read('debug-port');
+  if (!gate || !debug) {
+    const offset = crypto.createHash('sha1').update(PROJECT).digest().readUInt32BE(0) % 500;
+    gate ||= await pickPort(9400, 500, offset);
+    debug ||= await pickPort(9900, 500, offset);
+    fs.writeFileSync(path.join(STATE, 'port'), `${gate}\n`);
+    fs.writeFileSync(path.join(STATE, 'debug-port'), `${debug}\n`);
+  }
+  return { gate, debug };
+}
+
+async function resolveBrowser() {
+  const config = await import(pathToFileURL(path.join(PLAYWRITER_DIR, 'dist', 'browser-config.js')).href);
+  try {
+    return config.resolveBrowserExecutablePath();
+  } catch {
+    log('no browser found: running playwriter browser install');
+    const out = fs.openSync(BROWSER_LOG, 'a');
+    const code = await new Promise((resolve) => {
+      const child = playwriterSpawn(['browser', 'install'], { stdio: ['ignore', out, out] });
+      child.on('error', () => resolve(1));
+      child.on('exit', (exitCode) => resolve(exitCode ?? 1));
+    });
+    fs.closeSync(out);
+    if (code !== 0) throw new Error(`browser install failed (exit ${code}); see ${BROWSER_LOG}`);
+    return config.resolveBrowserExecutablePath();
+  }
+}
+
+function runGate({ gate, debug }) {
+  let leases = 0;
+  let lastActivity = Date.now();
+  let chromeUp = false;
+  let chromeProc = null;
+  let starting = null;
+  let stopping = null;
+  const sockets = new Set();
+
+  const touch = () => {
+    lastActivity = Date.now();
+  };
+  const probe = () => httpOk(debug, '/json/version');
+  const gone = async () => !(await probe());
+  const dropSockets = () => {
+    for (const socket of sockets) socket.destroy();
+    sockets.clear();
+  };
+  const fail = (res, error) => {
+    if (res.headersSent) return res.destroy();
+    res.writeHead(503, { 'content-type': 'text/plain' });
+    res.end(error.message);
+  };
+  const clean = (headers) => Object.fromEntries(Object.entries(headers).filter(([key]) => !HOP_BY_HOP.includes(key)));
+
+  const startChrome = async () => {
+    fs.mkdirSync(PROFILE, { recursive: true });
+    const bin = await resolveBrowser();
+    const args = [
+      `--user-data-dir=${PROFILE}`,
+      `--remote-debugging-port=${debug}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+    ];
+    if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) args.push('--headless=new');
+    if (process.env.PLAYWRITER_NO_SANDBOX) args.push('--no-sandbox');
+    args.push('about:blank');
+    fs.appendFileSync(BROWSER_LOG, '');
+    const from = fs.statSync(BROWSER_LOG).size;
+    const out = fs.openSync(BROWSER_LOG, 'a');
+    chromeProc = spawn(bin, args, { detached: true, stdio: ['ignore', out, out] });
+    chromeProc.on('error', (error) => log(`browser spawn error: ${error.message}`));
+    chromeProc.unref();
+    fs.closeSync(out);
+    log(`browser started pid=${chromeProc.pid} profile=${PROFILE}`);
+    const refused = () => fs.readFileSync(BROWSER_LOG).subarray(from).includes('No usable sandbox');
+    await waitFor(async () => (await probe()) || refused(), 30000);
+    if (await probe()) return;
+    if (refused()) {
+      throw new Error('browser refused to start: no usable sandbox. Set PLAYWRITER_NO_SANDBOX=1 and restart the agent (manual, chapter 9).');
+    }
+    throw new Error(`browser did not open debug port ${debug}; see ${BROWSER_LOG}`);
+  };
+
+  const ensureChrome = async () => {
+    if (stopping) await stopping;
+    if (chromeUp) return;
+    starting ??= (async () => {
+      if (await probe()) log('adopted running browser');
+      else await startChrome();
+      chromeUp = true;
+    })().finally(() => {
+      starting = null;
+    });
+    return starting;
+  };
+
+  const closeBrowser = async () => {
+    const info = await fetch(`http://${HOST}:${debug}/json/version`).then((res) => res.json()).catch(() => null);
+    if (!info?.webSocketDebuggerUrl) return;
+    await new Promise((resolve) => {
+      const ws = new WebSocket(info.webSocketDebuggerUrl);
+      ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      ws.onclose = resolve;
+      ws.onerror = resolve;
+      setTimeout(resolve, 5000).unref();
+    });
+  };
+
+  const stopChrome = () => {
+    stopping ??= (async () => {
+      chromeUp = false;
+      log('stopping browser: idle');
+      await closeBrowser();
+      if (!(await waitFor(gone, 10000))) {
+        if (chromeProc) chromeProc.kill('SIGTERM');
+        await waitFor(gone, 5000);
+      }
+      dropSockets();
+      log('browser stopped');
+    })().finally(() => {
+      stopping = null;
+    });
+    return stopping;
+  };
+
+  const proxyHttp = (req, res) => {
+    const up = http.request(
+      { host: HOST, port: debug, method: req.method, path: req.url, headers: { ...req.headers, host: `${HOST}:${debug}` } },
+      (upRes) => {
+        touch();
+        if (!(upRes.headers['content-type'] || '').includes('json')) {
+          res.writeHead(upRes.statusCode, clean(upRes.headers));
+          return upRes.pipe(res);
+        }
+        const chunks = [];
+        upRes.on('data', (chunk) => chunks.push(chunk));
+        upRes.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8')
+            .replaceAll(`${HOST}:${debug}`, `${HOST}:${gate}`)
+            .replaceAll(`localhost:${debug}`, `localhost:${gate}`);
+          res.writeHead(upRes.statusCode, { ...clean(upRes.headers), 'content-length': Buffer.byteLength(body) });
+          res.end(body);
+        });
+      },
+    );
+    up.on('error', (error) => fail(res, error));
+    req.pipe(up);
+  };
+
+  const proxyUpgrade = (req, socket, head) => {
+    const up = net.connect(debug, HOST);
+    sockets.add(up);
+    sockets.add(socket);
+    const lines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      const name = req.rawHeaders[i];
+      lines.push(name.toLowerCase() === 'host' ? `Host: ${HOST}:${debug}` : `${name}: ${req.rawHeaders[i + 1]}`);
+    }
+    up.write(`${lines.join('\r\n')}\r\n\r\n`);
+    if (head.length) up.write(head);
+    const end = () => {
+      sockets.delete(up);
+      sockets.delete(socket);
+      up.destroy();
+      socket.destroy();
+    };
+    up.on('error', end);
+    up.on('close', end);
+    socket.on('error', end);
+    socket.on('close', end);
+    up.on('data', touch);
+    socket.on('data', touch);
+    socket.pipe(up);
+    up.pipe(socket);
+  };
+
+  const currentBrowserPath = async () => {
+    const info = await fetch(`http://${HOST}:${debug}/json/version`).then((res) => res.json());
+    return new URL(info.webSocketDebuggerUrl).pathname;
+  };
+
+  const server = http.createServer((req, res) => {
+    if (req.url === '/__pwp/ping') return res.end(JSON.stringify({ project: PROJECT, pid: process.pid }));
+    if (req.url === '/__pwp/lease') {
+      leases += 1;
+      res.on('close', () => {
+        leases -= 1;
+      });
+      return res.write('leased\n');
+    }
+    touch();
+    ensureChrome().then(() => proxyHttp(req, res), (error) => fail(res, error));
+  });
+
+  server.on('upgrade', (req, socket, head) => {
+    touch();
+    ensureChrome()
+      .then(() => currentBrowserPath())
+      .then((browserPath) => {
+        req.url = req.url.replace(/^\/devtools\/browser\/[^/?]*/, browserPath);
+        proxyUpgrade(req, socket, head);
+      })
+      .catch((error) => socket.end(`HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n${error.message}`));
+  });
+
+  const tick = async () => {
+    if (chromeUp && (await gone())) {
+      chromeUp = false;
+      dropSockets();
+      log('browser went away');
+    }
+    const idle = Date.now() - lastActivity;
+    if (chromeUp && idle >= IDLE_MS) await stopChrome();
+    if (!chromeUp && leases === 0 && idle >= IDLE_MS) {
+      log('gate exiting: no leases, browser stopped');
+      process.exit(0);
+    }
+  };
+
+  server.on('error', (error) => {
+    log(`gate listen failed on ${gate}: ${error.message}`);
+    process.exit(0);
+  });
+  server.listen(gate, HOST, () => log(`gate on ${gate}, browser debug port ${debug}, idle ${IDLE_MS}ms`));
+  setInterval(() => {
+    tick().catch((error) => log(`tick failed: ${error.message}`));
+  }, Math.min(5000, Math.max(200, IDLE_MS / 4)));
+}
+
+async function ensureGate(port) {
+  if (await httpOk(port, '/__pwp/ping')) return;
+  const out = fs.openSync(GATE_LOG, 'a');
+  const gate = spawn(process.execPath, [__filename, '--gate'], {
+    cwd: PROJECT,
+    detached: true,
+    stdio: ['ignore', out, out],
+    env: { ...process.env, PLAYWRITER_PROJECT_DIR: PROJECT },
+  });
+  gate.unref();
+  fs.closeSync(out);
+  if (!(await waitFor(() => httpOk(port, '/__pwp/ping'), 5000))) {
+    throw new Error(`gate did not start on port ${port}; see ${GATE_LOG}`);
+  }
+}
+
+function openLease(port) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, HOST);
+    socket.once('connect', () => {
+      socket.write(`GET /__pwp/lease HTTP/1.1\r\nHost: ${HOST}\r\n\r\n`);
+      resolve(socket);
+    });
+    socket.once('error', reject);
+    socket.on('error', () => {});
+  });
+}
+
+async function main(argv) {
+  if (argv[0] === '--gate') return runGate(await loadPorts());
+  if (argv[0] === 'help' || argv[0] === '--help') return console.log(USAGE);
+
+  const ports = await loadPorts();
+  await ensureGate(ports.gate);
+  const lease = await openLease(ports.gate);
+  const base = `${HOST}:${ports.gate}`;
+  const direct = `ws://${base}/devtools/browser/`;
+
+  if (argv[0] === 'start') {
+    const res = await fetch(`http://${base}/json/version`, { signal: AbortSignal.timeout(60000) });
+    console.error(res.ok ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed (${res.status})`);
+    lease.destroy();
+    process.exit(res.ok ? 0 : 1);
+  }
+
+  const newSession = argv[0] === 'session' && (argv.length === 1 || argv[1].startsWith('-'));
+  const forwarded = newSession ? ['session', 'new', '--direct', direct, ...argv.slice(1)] : argv;
+  const child = playwriterSpawn(forwarded, {
+    stdio: 'inherit',
+    env: { ...process.env, PLAYWRITER_DIRECT: direct },
+  });
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(signal, () => child.kill(signal));
+  }
+  child.on('error', (error) => {
+    console.error(`playwriter-project: ${error.message}`);
+    process.exit(1);
+  });
+  child.on('exit', (code, signal) => {
+    lease.destroy();
+    process.exit(code ?? (signal ? 1 : 0));
+  });
+}
+
+main(process.argv.slice(2)).catch((error) => {
+  console.error(`playwriter-project: error: ${error.message}`);
+  process.exit(1);
+});
