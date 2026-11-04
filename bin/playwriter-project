@@ -19,6 +19,7 @@ const PLAYWRITER_BIN = path.join(PLAYWRITER_DIR, 'bin.js');
 
 const HOST = '127.0.0.1';
 const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
+const GONE_AFTER_PROBES = 3;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
 
 function findUp(start, name) {
@@ -195,6 +196,20 @@ function listenerPid(port) {
   return null;
 }
 
+async function liveProfileOwner() {
+  let lock;
+  try {
+    lock = fs.readlinkSync(path.join(PROFILE, 'SingletonLock'));
+  } catch {
+    return null;
+  }
+  const pid = Number(/-(\d+)$/.exec(lock)?.[1]) || null;
+  if (pid === null) return null;
+  const { browsers } = await listBrowsers({ fresh: true });
+  const owner = browsers.find((browser) => browser.pid === pid && browser.profile && path.resolve(browser.profile) === PROFILE);
+  return owner ? owner.pid : null;
+}
+
 async function resolveBrowser() {
   const config = await import(pathToFileURL(path.join(PLAYWRITER_DIR, 'dist', 'browser-config.js')).href);
   try {
@@ -218,6 +233,7 @@ function runGate({ gate, debug }) {
   let leaseSeq = 0;
   let lastActivity = Date.now();
   let chromeUp = false;
+  let missedProbes = 0;
   let chromeProc = null;
   let browser = null;
   let starting = null;
@@ -267,6 +283,11 @@ function runGate({ gate, debug }) {
 
   const startChrome = async () => {
     fs.mkdirSync(PROFILE, { recursive: true });
+    const owner = await liveProfileOwner();
+    if (owner) {
+      log(`relaunch refused: profile lock held by live browser pid ${owner}`);
+      throw new Error(`profile ${PROFILE} is held by live browser pid ${owner}; not relaunching`);
+    }
     const bin = await resolveBrowser();
     const args = [
       `--user-data-dir=${PROFILE}`,
@@ -289,6 +310,11 @@ function runGate({ gate, debug }) {
     await waitFor(async () => (await probe()) || refused(), 30000);
     if (await probe()) {
       const pid = listenerPid(debug) ?? chromeProc.pid;
+      const owner = await liveProfileOwner();
+      if (owner !== null && owner !== pid) {
+        browser = { pid, source: 'adopted', adopted: true, warning: `browser pid ${pid} on debug port ${debug} is not the browser this gate started (pid ${owner}); it was not stopped` };
+        return;
+      }
       fs.writeFileSync(BROWSER_PID, `${pid}\n`);
       browser = { pid, source: 'gate', adopted: false, warning: null };
       return;
@@ -302,9 +328,9 @@ function runGate({ gate, debug }) {
   const adopt = () => {
     const pid = listenerPid(debug);
     const recorded = readRecordedPid();
-    const adopted = pid !== null && pid !== recorded;
+    const adopted = pid === null || pid !== recorded;
     const warning = adopted
-      ? `browser pid ${pid} on debug port ${debug} is not the recorded pid ${recorded ?? 'none'}; it was not stopped, and another browser may share this project`
+      ? `browser pid ${pid ?? 'unknown'} on debug port ${debug} is not the recorded pid ${recorded ?? 'none'}; it was not stopped, and another browser may share this project`
       : null;
     browser = { pid, source: 'adopted', adopted, warning };
     log(`adopted running browser${pid ? ` pid=${pid}` : ''}`);
@@ -318,6 +344,7 @@ function runGate({ gate, debug }) {
       if (await probe()) adopt();
       else await startChrome();
       chromeUp = true;
+      missedProbes = 0;
     })().finally(() => {
       starting = null;
     });
@@ -459,11 +486,18 @@ function runGate({ gate, debug }) {
   });
 
   const tick = async () => {
-    if (chromeUp && (await gone())) {
-      chromeUp = false;
-      browser = null;
-      dropSockets();
-      log('browser went away');
+    if (chromeUp) {
+      if (await probe()) {
+        missedProbes = 0;
+      } else if (++missedProbes >= GONE_AFTER_PROBES) {
+        chromeUp = false;
+        browser = null;
+        missedProbes = 0;
+        dropSockets();
+        log(`browser went away after ${GONE_AFTER_PROBES} failed probes`);
+      } else {
+        log(`probe failed ${missedProbes}/${GONE_AFTER_PROBES}`);
+      }
     }
     const idle = Date.now() - lastActivity;
     if (chromeUp && idle >= IDLE_MS) {

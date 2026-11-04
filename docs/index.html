@@ -202,7 +202,7 @@ browsers: 2 open on this machine (scan 41 ms)
 <p>A folder with its own <code>.playwriter</code> is a project even inside a larger one, because the nearest match wins. Remove a stray <code>.playwriter</code> folder from a subdirectory to join its root project again.</p>
 <h3>Adopted browsers</h3>
 <p>The gate records the pid of each Chrome it starts, in <code>.playwriter/browser.pid</code>. When a gate starts and finds a browser already on its debug port, it adopts that browser. If the browser's pid is not the recorded one, status shows <code>"adopted": true</code> with a warning, and gate.log gets the same warning. Another browser may then share this project. The gate does not stop an adopted browser, so stop it yourself. The browsers tool refuses to close an adopted browser.</p>
-<p>A new gate that adopts the browser its earlier gate started is not flagged, because the pid matches. Windows is not checked, since the pid lookup is not implemented there.</p>
+<p>A new gate that adopts the browser its earlier gate started is not flagged, because the pid matches. On Windows the pid lookup is not implemented, so every browser found there is flagged as adopted and never stopped.</p>
 </section>
 
 <section class="chapter" id="ch-6">

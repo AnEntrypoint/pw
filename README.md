@@ -18,7 +18,7 @@ The project is the first of these that applies: `PLAYWRITER_PROJECT_DIR`; the ne
 
 Each MCP tool result ends with a status block. Its first line is this project's gate. Then comes one line for every Chromium browser open on the machine, and the pages of this project's browser sit under its line. `playwriter-project status` prints the same block, and `status --json` prints JSON with a `browsers` list. Status does not start the browser and does not count as traffic for the idle timer.
 
-The gate records the pid of each browser it starts in `.playwriter/browser.pid`. A browser that answers on the project's debug port but has another pid is reported as `adopted: true` with a warning, and the gate logs the same warning. The gate does not stop an adopted browser. The pid check runs on Linux and macOS only.
+The gate records the pid of each browser it starts in `.playwriter/browser.pid`. A browser that answers on the project's debug port but has another pid is reported as `adopted: true` with a warning, and the gate logs the same warning. The gate does not stop an adopted browser. The pid check runs on Linux and macOS only; where the listener's pid cannot be read, the browser counts as adopted and is never stopped. A browser counts as gone after three failed probes in a row. While its profile's `SingletonLock` names a live browser, the gate does not start another one on that profile.
 
 In a Linux container, add `--env PLAYWRITER_NO_SANDBOX=1` to the install command. Tabs close on an idle stop, and session cookies do not survive it.
 
