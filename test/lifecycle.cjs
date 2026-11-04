@@ -85,7 +85,8 @@ const check = (label) => {
   const m = mcpClient();
   await m.call(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
   m.notify('notifications/initialized');
-  await m.call(2, 'tools/list', {});
+  const tools = await m.call(2, 'tools/list', {});
+  assert.ok(tools.result.tools.some((tool) => tool.name === 'browsers'));
   await sleep(1500);
   assert.equal(await gateUp(), true);
   assert.equal(await chromeUp(), false);
@@ -105,6 +106,15 @@ const check = (label) => {
   assert.match(reuse, /keep=yes/);
   assert.equal(await chromeUp(), true);
   check('same MCP session reconnects after idle and the cookie survived');
+
+  const listed = JSON.parse((await m.call(5, 'tools/call', { name: 'browsers', arguments: { action: 'list' } })).result.content[0].text);
+  assert.equal(listed.browsers.supported, true);
+  check('browsers list reports the machine');
+
+  const closed = JSON.parse((await m.call(6, 'tools/call', { name: 'browsers', arguments: { action: 'close', target: 'project' } })).result.content[0].text);
+  assert.equal(closed.closed.length, 1);
+  assert.equal(await chromeUp(), false);
+  check('browsers close stops the project browser when no other lease is held');
 
   m.close();
   await sleep(IDLE_MS + 8000);

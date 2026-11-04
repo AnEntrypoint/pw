@@ -130,7 +130,7 @@ footer { border-top: 4px solid #000; margin-top: 2.4em; padding-top: 0.5em; font
 <tr><th>Arguments</th><th>Mode</th></tr>
 <tr><td>none</td><td>MCP server bound to this project's browser. Agents run this mode. Use it in <code>.mcp.json</code>.</td></tr>
 <tr><td><code>start</code></td><td>Open this project's browser now. It also opens on first use.</td></tr>
-<tr><td><code>status</code> [--json]</td><td>Show this project's gate, browser and open pages. It does not start the browser.</td></tr>
+<tr><td><code>status</code> [--json]</td><td>Show this project's gate, every Chromium browser on this machine, and this project's pages. It does not start the browser.</td></tr>
 <tr><td><code>session</code> [flags]</td><td>Create a CLI session bound to this project's browser.</td></tr>
 <tr><td><code>help</code></td><td>Print the usage.</td></tr>
 <tr><td>any other arguments</td><td>Run <code>playwriter &lt;args&gt;</code> bound to this project's browser.</td></tr>
@@ -138,13 +138,43 @@ footer { border-top: 4px solid #000; margin-top: 2.4em; padding-top: 0.5em; font
 <p>MCP mode connects straight to the gate. It does not use the relay.</p>
 <p>CLI commands are different. A CLI session is held by playwriter's relay, which listens on port 19988, starts on demand, and is shared by every playwriter CLI user on the machine. The relay reaches Chrome through this project's gate, because <code>session</code> passes the gate address to playwriter as <code>--direct</code>.</p>
 <h3>Feedback on each call</h3>
-<p>In MCP mode, every tool result ends with one extra text block. It has one line for the browser and one line per open page:</p>
+<p>In MCP mode, every tool result ends with one extra text block. Its first line is this project's gate. Then one line lists every Chromium browser on the machine, and the pages of this project's browser sit under its own line:</p>
 <pre>playwriter-project /work/app: gate pid 4321 port 9534, debug port 10034, browser running pid 4322 (gate), leases 1
-  page 3F2A9C0D1B8E4F6A7C5B2D1E0F9A8B7C about:blank "about:blank"</pre>
-<p>The tool list and any reply that carries no result pass through unchanged.</p>
+browsers: 2 open on this machine (scan 41 ms)
+  pid 4322, owner this project's gate pid 4321, profile /work/app/.playwriter/browser-profile, debug port 10034, pages 1, windows 2
+    page 3F2A9C0D1B8E4F6A7C5B2D1E0F9A8B7C about:blank "about:blank"
+  pid 1059177, owner gate pid 985903 for /workspace/oscraft, profile /workspace/oscraft/.playwriter/browser-profile, debug port 9931, pages 4, windows 6</pre>
+<p>The tool list gains one entry, <code>browsers</code>. A reply that carries no result passes through unchanged.</p>
 <h3>Status</h3>
-<p><code>playwriter-project status</code> prints the same header line and one line per page. <code>status --json</code> prints the gate pid and port, the debug port, the profile, the browser pid, whether the gate started the browser or adopted it, whether the browser is running, the lease count, and the pages. Each page has an id, a title and a URL. Only pages are listed, not workers or service targets.</p>
-<p>With no gate running, status says so and exits 0. In JSON it reports <code>"gate": null</code>.</p>
+<p><code>playwriter-project status</code> prints the same block. <code>status --json</code> prints the gate pid and port, the debug port, the profile, the browser pid, whether the gate started the browser or adopted it, whether the browser is running, the lease count with the pid of each lease holder, and the pages. Each page has an id, a title and a URL. Only pages are listed, not workers or service targets. The JSON also has a <code>browsers</code> list of every browser on the machine.</p>
+<p>With no gate running, status says so and exits 0, and the browser list is still shown. In JSON it reports <code>"gate": null</code>.</p>
+<h3>Browsers on this machine</h3>
+<p>A process counts as a browser when its program is Chromium or Chrome and it has no <code>--type=</code> argument. That leaves out renderer, GPU and helper processes. Linux reads <code>/proc</code>. macOS runs <code>ps</code>. Each browser gets one line:</p>
+<ul>
+  <li>the pid and the owner: this project's gate, another project's gate with its project path, or none, which means the browser was not started with a pw profile;</li>
+  <li>the profile directory, or default when the browser has no <code>--user-data-dir</code>;</li>
+  <li>the debug port, when <code>--remote-debugging-port</code> is in its arguments;</li>
+  <li>the page count from <code>/json/list</code>, when that port answers;</li>
+  <li>the window count from <code>xdotool search --pid</code>, when DISPLAY is set and xdotool is installed. Without xdotool the line has no window count. A busy X server can make a count read 0.</li>
+</ul>
+<p>The scan is cached for 2 seconds in each MCP process. Each probe waits at most 700 ms, and the probes run in parallel, so a tool call waits about one second at most for the block.</p>
+<h3>The browsers tool</h3>
+<p>Each MCP session lists a <code>browsers</code> tool next to <code>execute</code> and <code>reset</code>. It takes <code>action</code>, <code>target</code> and <code>force</code>.</p>
+<table>
+<tr><th>Call</th><th>Result</th></tr>
+<tr><td><code>action: "list"</code></td><td>Returns every browser as JSON.</td></tr>
+<tr><td><code>action: "close", target: "project"</code></td><td>Closes this project's browser through its gate, the same way the idle stop does. Refused while another lease is held, unless <code>force</code> is true. The refusal lists the lease pids. The calling session's own lease does not count. An adopted browser is refused.</td></tr>
+<tr><td><code>action: "close", target: "pid:&lt;n&gt;"</code></td><td>Closes a browser only when its pid is the one this project's gate started, the pid in <code>.playwriter/browser.pid</code>. Any other pid is refused, and the refusal names its owner: another project's gate with its path, a default or other browser, or an adopted browser. The lease rule applies too.</td></tr>
+</table>
+<p>The reply is JSON: the action, the target, what was closed, what was refused and why, and the browser list after the close. The status block after the reply shows the same new state. The tool never closes a page. Closing a browser ends its tabs.</p>
+<pre>{
+  "action": "close",
+  "target": "pid:1059177",
+  "closed": [],
+  "refused": [{ "target": "pid:1059177", "reason": "pid 1059177 belongs to gate pid 985903 for /workspace/oscraft; close it from that project" }],
+  "browsers": { ... }
+}</pre>
+<p>A gate that runs code from before this tool does not report <code>closeVerb</code> in its status, so close is refused on it until it goes idle and exits.</p>
 </section>
 
 <section class="chapter" id="ch-5">
@@ -171,7 +201,7 @@ footer { border-top: 4px solid #000; margin-top: 2.4em; padding-top: 0.5em; font
 </ol>
 <p>A folder with its own <code>.playwriter</code> is a project even inside a larger one, because the nearest match wins. Remove a stray <code>.playwriter</code> folder from a subdirectory to join its root project again.</p>
 <h3>Adopted browsers</h3>
-<p>The gate records the pid of each Chrome it starts, in <code>.playwriter/browser.pid</code>. When a gate starts and finds a browser already on its debug port, it adopts that browser. If the browser's pid is not the recorded one, status shows <code>"adopted": true</code> with a warning, and gate.log gets the same warning. Another browser may then share this project. The gate does not stop an adopted browser, so stop it yourself.</p>
+<p>The gate records the pid of each Chrome it starts, in <code>.playwriter/browser.pid</code>. When a gate starts and finds a browser already on its debug port, it adopts that browser. If the browser's pid is not the recorded one, status shows <code>"adopted": true</code> with a warning, and gate.log gets the same warning. Another browser may then share this project. The gate does not stop an adopted browser, so stop it yourself. The browsers tool refuses to close an adopted browser.</p>
 <p>A new gate that adopts the browser its earlier gate started is not flagged, because the pid matches. Windows is not checked, since the pid lookup is not implemented there.</p>
 </section>
 
@@ -206,7 +236,7 @@ footer { border-top: 4px solid #000; margin-top: 2.4em; padding-top: 0.5em; font
 <section class="chapter" id="ch-8">
 <h2>8. Limits</h2>
 <ul>
-  <li>Windows and macOS are not tested.</li>
+  <li>Windows is not covered. The browser scan does not run there, and the browsers tool refuses to close. macOS is scanned with ps and is not tested.</li>
   <li>Concurrent agents in one project share one gate and one browser. That is not stress-tested.</li>
   <li>A project moved to another path keeps its profile, because the profile is inside the folder. It gets a new gate and debug port only if the port files are missing.</li>
 </ul>
@@ -228,6 +258,11 @@ footer { border-top: 4px solid #000; margin-top: 2.4em; padding-top: 0.5em; font
 <tr><td>playwriter-project: error: port N is the gate for X, not Y. Delete .../port to pick a new port.</td><td>The port file in this folder points at another project's gate, so this folder was not started. Delete <code>.playwriter/port</code> here, then run the command again.</td></tr>
 <tr><td>WARNING browser pid P on debug port D is not the recorded pid R (gate.log, and status as ADOPTED)</td><td>Another browser is on this project's debug port. Find it with <code>status --json</code> and stop it. The gate does not stop it.</td></tr>
 <tr><td>playwriter-project: no gate running for X</td><td>No gate is running. This is not an error. The next tool call or <code>start</code> starts one.</td></tr>
+<tr><td>browsers: not scanned, Windows is not covered</td><td>The browser scan does not run on Windows, so the browsers tool does not close there. Use the browser's own window or the system's process list.</td></tr>
+<tr><td>{"closed": false, "reason": "N other lease(s) held"}</td><td>Another session in this project holds a lease. Close that session, or pass force to close anyway. A forced close drops that session's connection to the browser. The reply lists the lease pids.</td></tr>
+<tr><td>pid P belongs to gate pid G for X; close it from that project</td><td>The browser belongs to another project. Close it from project X, or leave it.</td></tr>
+<tr><td>pid P is not started by pw (owner none)</td><td>A default or other browser. The tool does not close it.</td></tr>
+<tr><td>this project's gate runs code from before the browsers tool</td><td>The gate is replaced when it goes idle. Wait for it to exit, then run the command again.</td></tr>
 <tr><td>playwriter-project: error: ...</td><td>Read the message. gate.log is the record.</td></tr>
 </table>
 </section>

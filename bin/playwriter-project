@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { spawn, execFileSync } = require('node:child_process');
+const { listBrowsers, browserLines, browserReport } = require('../lib/browsers');
 
 let PLAYWRITER_DIR;
 try {
@@ -43,7 +44,7 @@ const USAGE = [
   'usage: playwriter-project [start | status [--json] | session [flags] | help | playwriter-args...]',
   '  (no args)  playwriter MCP server bound to this project browser (use in .mcp.json); each tool result ends with a status block',
   '  start      open this project browser now; it also opens on first use',
-  '  status     show the gate, the browser and its pages; --json prints JSON',
+  '  status     show the gate, every Chromium browser on this machine, and the pages of this project; --json prints JSON',
   '  session    create a CLI session bound to this project browser',
   '  <args>     run `playwriter <args>` bound to this project browser',
   'install:    npx -y add-mcp "npx -y github:AnEntrypoint/pw" -n playwriter --all -g -y',
@@ -213,7 +214,8 @@ async function resolveBrowser() {
 }
 
 function runGate({ gate, debug }) {
-  let leases = 0;
+  const leaseHolders = new Map();
+  let leaseSeq = 0;
   let lastActivity = Date.now();
   let chromeUp = false;
   let chromeProc = null;
@@ -242,7 +244,7 @@ function runGate({ gate, debug }) {
     .filter((target) => target.type === 'page')
     .map(({ id, title, url }) => ({ id, title, url }));
 
-  const statusPayload = async () => {
+  const statusPayload = async ({ pages = true } = {}) => {
     const running = await probe();
     return {
       project: PROJECT,
@@ -256,8 +258,10 @@ function runGate({ gate, debug }) {
         adopted: browser?.adopted ?? false,
         warning: browser?.warning ?? null,
       },
-      leases,
-      pages: running ? await pageList() : [],
+      leases: leaseHolders.size,
+      leaseHolders: [...leaseHolders.values()],
+      closeVerb: true,
+      pages: running && pages ? await pageList() : [],
     };
   };
 
@@ -332,10 +336,10 @@ function runGate({ gate, debug }) {
     });
   };
 
-  const stopChrome = () => {
+  const stopChrome = (reason = 'idle') => {
     stopping ??= (async () => {
       chromeUp = false;
-      log('stopping browser: idle');
+      log(`stopping browser: ${reason}`);
       await closeBrowser();
       if (!(await waitFor(gone, 10000))) {
         if (chromeProc) chromeProc.kill('SIGTERM');
@@ -349,6 +353,18 @@ function runGate({ gate, debug }) {
       stopping = null;
     });
     return stopping;
+  };
+
+  const closeFromCaller = async (params) => {
+    const wanted = params.get('pid');
+    const others = [...leaseHolders.values()].filter((lease) => String(lease.pid) !== params.get('self'));
+    if (!browser || !(await probe())) return { closed: false, reason: 'no browser is running for this project' };
+    if (browser.adopted) return { closed: false, pid: browser.pid, reason: `browser pid ${browser.pid} was adopted; this gate did not start it, so it is not closed` };
+    if (wanted && Number(wanted) !== browser.pid) return { closed: false, pid: browser.pid, reason: `pid ${wanted} is not this project's browser, which is pid ${browser.pid}` };
+    if (others.length && params.get('force') !== '1') return { closed: false, pid: browser.pid, reason: `${others.length} other lease(s) held`, leases: others };
+    const { pid } = browser;
+    await stopChrome('closed by the browsers tool');
+    return { closed: true, pid };
   };
 
   const proxyHttp = (req, res) => {
@@ -407,22 +423,24 @@ function runGate({ gate, debug }) {
     return new URL(info.webSocketDebuggerUrl).pathname;
   };
 
+  const respondJson = (res, body) => body.then(
+    (payload) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    },
+    (error) => fail(res, error),
+  );
+
   const server = http.createServer((req, res) => {
-    if (req.url === '/__pwp/ping') return res.end(JSON.stringify({ project: PROJECT, pid: process.pid }));
-    if (req.url === '/__pwp/status') {
-      return statusPayload().then(
-        (body) => {
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify(body));
-        },
-        (error) => fail(res, error),
-      );
-    }
-    if (req.url === '/__pwp/lease') {
-      leases += 1;
-      res.on('close', () => {
-        leases -= 1;
-      });
+    const [route, query = ''] = req.url.split('?');
+    const params = new URLSearchParams(query);
+    if (route === '/__pwp/ping') return res.end(JSON.stringify({ project: PROJECT, pid: process.pid }));
+    if (route === '/__pwp/status') return respondJson(res, statusPayload({ pages: params.get('pages') !== '0' }));
+    if (route === '/__pwp/close' && req.method === 'POST') return respondJson(res, closeFromCaller(params));
+    if (route === '/__pwp/lease') {
+      const id = ++leaseSeq;
+      leaseHolders.set(id, { pid: Number(req.headers['x-pwp-pid']) || null, since: Date.now() });
+      res.on('close', () => leaseHolders.delete(id));
       return res.write('leased\n');
     }
     touch();
@@ -456,7 +474,7 @@ function runGate({ gate, debug }) {
         await stopChrome();
       }
     }
-    if (!chromeUp && leases === 0 && idle >= IDLE_MS) {
+    if (!chromeUp && leaseHolders.size === 0 && idle >= IDLE_MS) {
       log('gate exiting: no leases, browser stopped');
       process.exit(0);
     }
@@ -496,7 +514,7 @@ function openLease(port) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(port, HOST);
     socket.once('connect', () => {
-      socket.write(`GET /__pwp/lease HTTP/1.1\r\nHost: ${HOST}\r\n\r\n`);
+      socket.write(`GET /__pwp/lease HTTP/1.1\r\nHost: ${HOST}\r\nX-Pwp-Pid: ${process.pid}\r\n\r\n`);
       resolve(socket);
     });
     socket.once('error', reject);
@@ -504,28 +522,32 @@ function openLease(port) {
   });
 }
 
-function statusLines(status) {
-  if (!status) return ['playwriter-project: no gate status: the gate is not running or not reachable'];
+function gateHeader(status) {
   const { browser: b, gate, debugPort, leases } = status;
   const adopted = b.adopted ? `, ADOPTED: ${b.warning}` : '';
-  const header = `playwriter-project ${status.project}: gate pid ${gate.pid} port ${gate.port}, debug port ${debugPort}, browser ${b.running ? 'running' : 'stopped'} pid ${b.pid ?? '-'} (${b.source ?? 'none'})${adopted}, leases ${leases}`;
-  const pages = status.pages.map((page) => `  page ${page.id} ${page.url} "${String(page.title).replace(/\s+/g, ' ')}"`);
-  return [header, ...pages];
+  return `playwriter-project ${status.project}: gate pid ${gate.pid} port ${gate.port}, debug port ${debugPort}, browser ${b.running ? 'running' : 'stopped'} pid ${b.pid ?? '-'} (${b.source ?? 'none'})${adopted}, leases ${leases}`;
+}
+
+function feedbackLines(status, machine) {
+  const header = status ? gateHeader(status) : 'playwriter-project: no gate status: the gate is not running or not reachable';
+  return [header, ...browserLines(machine, PROJECT)];
+}
+
+async function feedbackText(gatePort) {
+  const [status, machine] = await Promise.all([httpJson(gatePort, '/__pwp/status?pages=0', 1000), listBrowsers()]);
+  return feedbackLines(status, machine).join('\n');
 }
 
 async function status(json) {
-  const { gate: port, debug } = readPorts();
+  const { gate: port } = readPorts();
   const ping = port ? await httpJson(port, '/__pwp/ping', 2000) : null;
-  if (!ping) {
-    const browserRunning = debug ? await httpOk(debug, '/json/version', 2000) : false;
-    if (json) return console.log(JSON.stringify({ project: PROJECT, gate: null, browserRunning }, null, 2));
-    return console.log(`playwriter-project: no gate running for ${PROJECT}${browserRunning ? `; a browser still answers on debug port ${debug}` : ''}`);
-  }
-  if (ping.project !== PROJECT) throw new Error(`port ${port} is the gate for ${ping.project}, not ${PROJECT}`);
-  const body = await httpJson(port, '/__pwp/status', 3000);
-  if (!body) throw new Error(`gate on port ${port} predates status; run again after it exits`);
-  if (json) return console.log(JSON.stringify(body, null, 2));
-  console.log(statusLines(body).join('\n'));
+  if (ping && ping.project !== PROJECT) throw new Error(`port ${port} is the gate for ${ping.project}, not ${PROJECT}`);
+  const body = ping ? await httpJson(port, '/__pwp/status', 3000) : null;
+  if (ping && !body) throw new Error(`gate on port ${port} predates status; run again after it exits`);
+  const machine = await listBrowsers({ fresh: true });
+  if (json) return console.log(JSON.stringify({ ...(body ?? { project: PROJECT, gate: null }), browsers: browserReport(machine, PROJECT) }, null, 2));
+  const lines = body ? feedbackLines(body, machine) : [`playwriter-project: no gate running for ${PROJECT}`, ...browserLines(machine, PROJECT)];
+  console.log(lines.join('\n'));
 }
 
 function parseFrame(line) {
@@ -554,21 +576,109 @@ function lineReader(onLine) {
   };
 }
 
-function proxyMcp(child, gatePort) {
-  const pending = new Set();
+const BROWSERS_TOOL = {
+  name: 'browsers',
+  description: 'List the Chromium browsers open on this machine, or close one. action "list" reports every browser and its owner. action "close" closes this project\'s browser with target "project", or a browser this project\'s gate started with target "pid:<n>". Other browsers are refused and named. A close is refused while other leases are held, unless force is true.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['list', 'close'] },
+      target: { type: 'string', description: '"project" or "pid:<n>"; required for close' },
+      force: { type: 'boolean', description: 'close even when other leases are held' },
+    },
+    required: ['action'],
+  },
+};
+
+async function closeGate(port, { force, pid }) {
+  const status = await httpJson(port, '/__pwp/status?pages=0', 1000);
+  if (!status) return { closed: false, reason: 'the gate is not reachable' };
+  if (!status.closeVerb) return { closed: false, reason: "this project's gate runs code from before the browsers tool; it is replaced when it goes idle" };
+  const params = new URLSearchParams({ self: String(process.pid), force: force ? '1' : '0' });
+  if (pid !== undefined) params.set('pid', String(pid));
+  try {
+    const res = await fetch(`http://${HOST}:${port}/__pwp/close?${params}`, { method: 'POST', signal: AbortSignal.timeout(30000) });
+    return await res.json();
+  } catch (error) {
+    return { closed: false, reason: `close request failed: ${error.message}` };
+  }
+}
+
+async function closePid(pid, force, port, machine) {
+  const hit = machine.browsers.find((browser) => browser.pid === pid);
+  if (!hit) return { closed: false, reason: `pid ${pid} is not a running Chromium browser that pw can see` };
+  if (hit.project === null) return { closed: false, reason: `pid ${pid} is not started by pw (owner none): a default or other browser` };
+  if (hit.project !== PROJECT) {
+    const owner = hit.gate ? `gate pid ${hit.gate.pid}` : 'a gate that is not running';
+    return { closed: false, reason: `pid ${pid} belongs to ${owner} for ${hit.project}; close it from that project` };
+  }
+  if (!hit.gate) return { closed: false, reason: `no gate is running for ${PROJECT}` };
+  return closeGate(port, { force, pid });
+}
+
+async function settle(pids) {
+  const end = Date.now() + 3000;
+  let machine = await listBrowsers({ fresh: true });
+  while (pids.some((pid) => machine.browsers.some((browser) => browser.pid === pid)) && Date.now() < end) {
+    await sleep(200);
+    machine = await listBrowsers({ fresh: true });
+  }
+  return machine;
+}
+
+async function runBrowsers(args, port) {
+  const { action, target } = args;
+  if (action === 'list') return { ok: true, body: { action, browsers: browserReport(await listBrowsers(), PROJECT) } };
+  if (action !== 'close') return { ok: false, body: { error: 'action must be "list" or "close"' } };
+  const pid = /^pid:(\d+)$/.exec(target ?? '')?.[1];
+  if (target !== 'project' && pid === undefined) return { ok: false, body: { error: 'target must be "project" or "pid:<n>"' } };
+  const force = args.force === true;
+  const outcome = target === 'project'
+    ? await closeGate(port, { force })
+    : await closePid(Number(pid), force, port, await listBrowsers({ fresh: true }));
+  const { closed, ...detail } = outcome;
+  const after = await settle(closed && detail.pid ? [detail.pid] : []);
+  return {
+    ok: true,
+    body: {
+      action,
+      target,
+      force,
+      closed: closed ? [{ target, ...detail }] : [],
+      refused: closed ? [] : [{ target, ...detail }],
+      browsers: browserReport(after, PROJECT),
+    },
+  };
+}
+
+function proxyMcp(child, ports) {
+  const pending = new Map();
   let out = Promise.resolve();
   const queue = (task) => {
     out = out.then(task).catch((error) => console.error(`playwriter-project: feedback failed: ${error.message}`));
   };
   const emit = (line) => queue(() => process.stdout.write(`${line}\n`));
+  const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
   const answer = (msg) => queue(async () => {
-    msg.result.content.push({ type: 'text', text: statusLines(await httpJson(gatePort, '/__pwp/status', 2000)).join('\n') });
-    process.stdout.write(`${JSON.stringify(msg)}\n`);
+    msg.result.content.push({ type: 'text', text: await feedbackText(ports.gate) });
+    send(msg);
   });
+  const answerBrowsers = (msg) => queue(async () => {
+    const { ok, body } = await runBrowsers(msg.params.arguments ?? {}, ports.gate).catch((error) => ({ ok: false, body: { error: error.message } }));
+    const content = [{ type: 'text', text: JSON.stringify(body, null, 2) }, { type: 'text', text: await feedbackText(ports.gate) }];
+    send({ jsonrpc: '2.0', id: msg.id, result: { content, isError: !ok } });
+  });
+  const takePending = (id) => {
+    const key = JSON.stringify(id);
+    const method = pending.get(key);
+    pending.delete(key);
+    return method;
+  };
 
   const fromClient = lineReader((line) => {
     const msg = parseFrame(line);
-    if (msg?.method === 'tools/call' && msg.id !== undefined) pending.add(JSON.stringify(msg.id));
+    if (msg?.method === 'tools/call' && msg.params?.name === 'browsers' && msg.id !== undefined) return answerBrowsers(msg);
+    if ((msg?.method === 'tools/call' || msg?.method === 'tools/list') && msg.id !== undefined) pending.set(JSON.stringify(msg.id), msg.method);
     child.stdin.write(`${line}\n`);
   });
   child.stdin.on('error', () => {});
@@ -581,9 +691,12 @@ function proxyMcp(child, gatePort) {
 
   const fromChild = lineReader((line) => {
     const msg = parseFrame(line);
-    const isToolCall = msg?.id !== undefined && pending.delete(JSON.stringify(msg.id));
-    if (isToolCall && Array.isArray(msg.result?.content)) answer(msg);
-    else emit(line);
+    const method = msg?.id === undefined ? undefined : takePending(msg.id);
+    if (method === 'tools/list' && Array.isArray(msg.result?.tools)) {
+      return emit(JSON.stringify({ ...msg, result: { ...msg.result, tools: [...msg.result.tools, BROWSERS_TOOL] } }));
+    }
+    if (method === 'tools/call' && Array.isArray(msg.result?.content)) return answer(msg);
+    emit(line);
   });
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk) => fromChild.push(chunk));
@@ -619,7 +732,7 @@ async function main(argv) {
     stdio: mcp ? ['pipe', 'pipe', 'inherit'] : 'inherit',
     env: { ...process.env, PLAYWRITER_DIRECT: direct },
   });
-  const feedback = mcp ? proxyMcp(child, ports.gate) : null;
+  const feedback = mcp ? proxyMcp(child, ports) : null;
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(signal, () => child.kill(signal));
   }
