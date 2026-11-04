@@ -5,7 +5,7 @@ const http = require('node:http');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 
 let PLAYWRITER_DIR;
 try {
@@ -17,22 +17,38 @@ try {
 const PLAYWRITER_BIN = path.join(PLAYWRITER_DIR, 'bin.js');
 
 const HOST = '127.0.0.1';
-const PROJECT = path.resolve(process.env.PLAYWRITER_PROJECT_DIR || process.cwd());
+const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
+const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
+
+function findUp(start, name) {
+  for (let dir = start; ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, name))) return dir;
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+function projectRoot(cwd) {
+  if (process.env.PLAYWRITER_PROJECT_DIR) return path.resolve(process.env.PLAYWRITER_PROJECT_DIR);
+  return findUp(cwd, '.playwriter') || findUp(cwd, '.git') || cwd;
+}
+
+const PROJECT = projectRoot(process.cwd());
 const STATE = path.join(PROJECT, '.playwriter');
 const PROFILE = path.join(STATE, 'browser-profile');
 const GATE_LOG = path.join(STATE, 'gate.log');
 const BROWSER_LOG = path.join(STATE, 'browser.log');
-const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
-const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
+const BROWSER_PID = path.join(STATE, 'browser.pid');
 
 const USAGE = [
-  'usage: playwriter-project [start | session [flags] | help | playwriter-args...]',
-  '  (no args)  playwriter MCP server bound to this project browser (use in .mcp.json)',
+  'usage: playwriter-project [start | status [--json] | session [flags] | help | playwriter-args...]',
+  '  (no args)  playwriter MCP server bound to this project browser (use in .mcp.json); each tool result ends with a status block',
   '  start      open this project browser now; it also opens on first use',
+  '  status     show the gate, the browser and its pages; --json prints JSON',
   '  session    create a CLI session bound to this project browser',
   '  <args>     run `playwriter <args>` bound to this project browser',
   'install:    npx -y add-mcp "npx -y github:AnEntrypoint/pw" -n playwriter --all -g -y',
-  'env:        PLAYWRITER_PROJECT_DIR (default cwd), PLAYWRITER_BROWSER_PATH, PLAYWRITER_NO_SANDBOX=1,',
+  'env:        PLAYWRITER_PROJECT_DIR (default: nearest ancestor of cwd with .playwriter, else with .git, else cwd),',
+  '            PLAYWRITER_BROWSER_PATH, PLAYWRITER_NO_SANDBOX=1,',
   `            PLAYWRITER_IDLE_MS (default ${IDLE_MS}: browser stops after this long with no traffic)`,
 ].join('\n');
 
@@ -40,18 +56,34 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (line) => fs.appendFileSync(GATE_LOG, `${new Date().toISOString()} ${line}\n`);
 const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, ...options });
 
-function httpOk(port, urlPath, timeout = 3000) {
+function httpGet(port, urlPath, timeout = 3000) {
   return new Promise((resolve) => {
     const req = http.get({ host: HOST, port, path: urlPath, timeout }, (res) => {
-      res.resume();
-      resolve(res.statusCode === 200);
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', () => resolve(null));
     });
-    req.on('error', () => resolve(false));
+    req.on('error', () => resolve(null));
     req.on('timeout', () => {
       req.destroy();
-      resolve(false);
+      resolve(null);
     });
   });
+}
+
+async function httpOk(port, urlPath, timeout) {
+  return (await httpGet(port, urlPath, timeout))?.status === 200;
+}
+
+async function httpJson(port, urlPath, timeout) {
+  const res = await httpGet(port, urlPath, timeout);
+  if (res?.status !== 200) return null;
+  try {
+    return JSON.parse(res.body);
+  } catch {
+    return null;
+  }
 }
 
 async function waitFor(check, ms) {
@@ -79,8 +111,7 @@ async function pickPort(base, span, offset) {
   throw new Error(`no free port in ${base}-${base + span - 1}`);
 }
 
-async function loadPorts() {
-  fs.mkdirSync(STATE, { recursive: true });
+function readPorts() {
   const read = (name) => {
     try {
       return Number(fs.readFileSync(path.join(STATE, name), 'utf8')) || 0;
@@ -88,8 +119,12 @@ async function loadPorts() {
       return 0;
     }
   };
-  let gate = read('port');
-  let debug = read('debug-port');
+  return { gate: read('port'), debug: read('debug-port') };
+}
+
+async function loadPorts() {
+  fs.mkdirSync(STATE, { recursive: true });
+  let { gate, debug } = readPorts();
   if (!gate || !debug) {
     const offset = crypto.createHash('sha1').update(PROJECT).digest().readUInt32BE(0) % 500;
     gate ||= await pickPort(9400, 500, offset);
@@ -98,6 +133,65 @@ async function loadPorts() {
     fs.writeFileSync(path.join(STATE, 'debug-port'), `${debug}\n`);
   }
   return { gate, debug };
+}
+
+function readRecordedPid() {
+  try {
+    return Number(fs.readFileSync(BROWSER_PID, 'utf8')) || null;
+  } catch {
+    return null;
+  }
+}
+
+function linuxListenerPid(port) {
+  const hex = port.toString(16).toUpperCase().padStart(4, '0');
+  const inodes = new Set();
+  for (const file of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let rows;
+    try {
+      rows = fs.readFileSync(file, 'utf8').split('\n').slice(1);
+    } catch {
+      continue;
+    }
+    for (const row of rows) {
+      const cols = row.trim().split(/\s+/);
+      if (cols.length > 9 && cols[3] === '0A' && cols[1].endsWith(`:${hex}`)) inodes.add(cols[9]);
+    }
+  }
+  if (inodes.size === 0) return null;
+  for (const entry of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    let fds;
+    try {
+      fds = fs.readdirSync(`/proc/${entry}/fd`);
+    } catch {
+      continue;
+    }
+    for (const fd of fds) {
+      let target;
+      try {
+        target = fs.readlinkSync(`/proc/${entry}/fd/${fd}`);
+      } catch {
+        continue;
+      }
+      const match = /^socket:\[(\d+)\]$/.exec(target);
+      if (match && inodes.has(match[1])) return Number(entry);
+    }
+  }
+  return null;
+}
+
+function listenerPid(port) {
+  if (process.platform === 'linux') return linuxListenerPid(port);
+  if (process.platform === 'darwin') {
+    try {
+      const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return Number(out.split('\n')[0]) || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 async function resolveBrowser() {
@@ -123,6 +217,7 @@ function runGate({ gate, debug }) {
   let lastActivity = Date.now();
   let chromeUp = false;
   let chromeProc = null;
+  let browser = null;
   let starting = null;
   let stopping = null;
   const sockets = new Set();
@@ -142,6 +237,29 @@ function runGate({ gate, debug }) {
     res.end(error.message);
   };
   const clean = (headers) => Object.fromEntries(Object.entries(headers).filter(([key]) => !HOP_BY_HOP.includes(key)));
+
+  const pageList = async () => ((await httpJson(debug, '/json/list', 3000)) ?? [])
+    .filter((target) => target.type === 'page')
+    .map(({ id, title, url }) => ({ id, title, url }));
+
+  const statusPayload = async () => {
+    const running = await probe();
+    return {
+      project: PROJECT,
+      gate: { pid: process.pid, port: gate },
+      debugPort: debug,
+      profile: PROFILE,
+      browser: {
+        pid: browser?.pid ?? null,
+        running,
+        source: browser?.source ?? null,
+        adopted: browser?.adopted ?? false,
+        warning: browser?.warning ?? null,
+      },
+      leases,
+      pages: running ? await pageList() : [],
+    };
+  };
 
   const startChrome = async () => {
     fs.mkdirSync(PROFILE, { recursive: true });
@@ -165,18 +283,35 @@ function runGate({ gate, debug }) {
     log(`browser started pid=${chromeProc.pid} profile=${PROFILE}`);
     const refused = () => fs.readFileSync(BROWSER_LOG).subarray(from).includes('No usable sandbox');
     await waitFor(async () => (await probe()) || refused(), 30000);
-    if (await probe()) return;
+    if (await probe()) {
+      const pid = listenerPid(debug) ?? chromeProc.pid;
+      fs.writeFileSync(BROWSER_PID, `${pid}\n`);
+      browser = { pid, source: 'gate', adopted: false, warning: null };
+      return;
+    }
     if (refused()) {
       throw new Error('browser refused to start: no usable sandbox. Set PLAYWRITER_NO_SANDBOX=1 and restart the agent (manual, chapter 9).');
     }
     throw new Error(`browser did not open debug port ${debug}; see ${BROWSER_LOG}`);
   };
 
+  const adopt = () => {
+    const pid = listenerPid(debug);
+    const recorded = readRecordedPid();
+    const adopted = pid !== null && pid !== recorded;
+    const warning = adopted
+      ? `browser pid ${pid} on debug port ${debug} is not the recorded pid ${recorded ?? 'none'}; it was not stopped, and another browser may share this project`
+      : null;
+    browser = { pid, source: 'adopted', adopted, warning };
+    log(`adopted running browser${pid ? ` pid=${pid}` : ''}`);
+    if (warning) log(`WARNING ${warning}`);
+  };
+
   const ensureChrome = async () => {
     if (stopping) await stopping;
     if (chromeUp) return;
     starting ??= (async () => {
-      if (await probe()) log('adopted running browser');
+      if (await probe()) adopt();
       else await startChrome();
       chromeUp = true;
     })().finally(() => {
@@ -207,6 +342,8 @@ function runGate({ gate, debug }) {
         await waitFor(gone, 5000);
       }
       dropSockets();
+      browser = null;
+      fs.rmSync(BROWSER_PID, { force: true });
       log('browser stopped');
     })().finally(() => {
       stopping = null;
@@ -272,6 +409,15 @@ function runGate({ gate, debug }) {
 
   const server = http.createServer((req, res) => {
     if (req.url === '/__pwp/ping') return res.end(JSON.stringify({ project: PROJECT, pid: process.pid }));
+    if (req.url === '/__pwp/status') {
+      return statusPayload().then(
+        (body) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(body));
+        },
+        (error) => fail(res, error),
+      );
+    }
     if (req.url === '/__pwp/lease') {
       leases += 1;
       res.on('close', () => {
@@ -297,11 +443,19 @@ function runGate({ gate, debug }) {
   const tick = async () => {
     if (chromeUp && (await gone())) {
       chromeUp = false;
+      browser = null;
       dropSockets();
       log('browser went away');
     }
     const idle = Date.now() - lastActivity;
-    if (chromeUp && idle >= IDLE_MS) await stopChrome();
+    if (chromeUp && idle >= IDLE_MS) {
+      if (browser?.adopted) {
+        chromeUp = false;
+        log('released adopted browser without stopping it');
+      } else {
+        await stopChrome();
+      }
+    }
     if (!chromeUp && leases === 0 && idle >= IDLE_MS) {
       log('gate exiting: no leases, browser stopped');
       process.exit(0);
@@ -319,7 +473,11 @@ function runGate({ gate, debug }) {
 }
 
 async function ensureGate(port) {
-  if (await httpOk(port, '/__pwp/ping')) return;
+  const ping = await httpJson(port, '/__pwp/ping', 3000);
+  if (ping) {
+    if (ping.project === PROJECT) return;
+    throw new Error(`port ${port} is the gate for ${ping.project}, not ${PROJECT}. Delete ${path.join(STATE, 'port')} to pick a new port.`);
+  }
   const out = fs.openSync(GATE_LOG, 'a');
   const gate = spawn(process.execPath, [__filename, '--gate'], {
     cwd: PROJECT,
@@ -346,9 +504,100 @@ function openLease(port) {
   });
 }
 
+function statusLines(status) {
+  if (!status) return ['playwriter-project: no gate status: the gate is not running or not reachable'];
+  const { browser: b, gate, debugPort, leases } = status;
+  const adopted = b.adopted ? `, ADOPTED: ${b.warning}` : '';
+  const header = `playwriter-project ${status.project}: gate pid ${gate.pid} port ${gate.port}, debug port ${debugPort}, browser ${b.running ? 'running' : 'stopped'} pid ${b.pid ?? '-'} (${b.source ?? 'none'})${adopted}, leases ${leases}`;
+  const pages = status.pages.map((page) => `  page ${page.id} ${page.url} "${String(page.title).replace(/\s+/g, ' ')}"`);
+  return [header, ...pages];
+}
+
+async function status(json) {
+  const { gate: port, debug } = readPorts();
+  const ping = port ? await httpJson(port, '/__pwp/ping', 2000) : null;
+  if (!ping) {
+    const browserRunning = debug ? await httpOk(debug, '/json/version', 2000) : false;
+    if (json) return console.log(JSON.stringify({ project: PROJECT, gate: null, browserRunning }, null, 2));
+    return console.log(`playwriter-project: no gate running for ${PROJECT}${browserRunning ? `; a browser still answers on debug port ${debug}` : ''}`);
+  }
+  if (ping.project !== PROJECT) throw new Error(`port ${port} is the gate for ${ping.project}, not ${PROJECT}`);
+  const body = await httpJson(port, '/__pwp/status', 3000);
+  if (!body) throw new Error(`gate on port ${port} predates status; run again after it exits`);
+  if (json) return console.log(JSON.stringify(body, null, 2));
+  console.log(statusLines(body).join('\n'));
+}
+
+function parseFrame(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+function lineReader(onLine) {
+  let rest = '';
+  return {
+    push(chunk) {
+      rest += chunk;
+      let end;
+      while ((end = rest.indexOf('\n')) >= 0) {
+        onLine(rest.slice(0, end));
+        rest = rest.slice(end + 1);
+      }
+    },
+    end() {
+      if (rest) onLine(rest);
+      rest = '';
+    },
+  };
+}
+
+function proxyMcp(child, gatePort) {
+  const pending = new Set();
+  let out = Promise.resolve();
+  const queue = (task) => {
+    out = out.then(task).catch((error) => console.error(`playwriter-project: feedback failed: ${error.message}`));
+  };
+  const emit = (line) => queue(() => process.stdout.write(`${line}\n`));
+  const answer = (msg) => queue(async () => {
+    msg.result.content.push({ type: 'text', text: statusLines(await httpJson(gatePort, '/__pwp/status', 2000)).join('\n') });
+    process.stdout.write(`${JSON.stringify(msg)}\n`);
+  });
+
+  const fromClient = lineReader((line) => {
+    const msg = parseFrame(line);
+    if (msg?.method === 'tools/call' && msg.id !== undefined) pending.add(JSON.stringify(msg.id));
+    child.stdin.write(`${line}\n`);
+  });
+  child.stdin.on('error', () => {});
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => fromClient.push(chunk));
+  process.stdin.on('end', () => {
+    fromClient.end();
+    child.stdin.end();
+  });
+
+  const fromChild = lineReader((line) => {
+    const msg = parseFrame(line);
+    const isToolCall = msg?.id !== undefined && pending.delete(JSON.stringify(msg.id));
+    if (isToolCall && Array.isArray(msg.result?.content)) answer(msg);
+    else emit(line);
+  });
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => fromChild.push(chunk));
+  child.stdout.on('end', () => fromChild.end());
+
+  return {
+    flushed: () => out.then(() => new Promise((resolve) => process.stdout.write('', resolve))),
+  };
+}
+
 async function main(argv) {
   if (argv[0] === '--gate') return runGate(await loadPorts());
   if (argv[0] === 'help' || argv[0] === '--help') return console.log(USAGE);
+  if (argv[0] === 'status') return status(argv.includes('--json'));
 
   const ports = await loadPorts();
   await ensureGate(ports.gate);
@@ -365,10 +614,12 @@ async function main(argv) {
 
   const newSession = argv[0] === 'session' && (argv.length === 1 || argv[1].startsWith('-'));
   const forwarded = newSession ? ['session', 'new', '--direct', direct, ...argv.slice(1)] : argv;
+  const mcp = forwarded.length === 0;
   const child = playwriterSpawn(forwarded, {
-    stdio: 'inherit',
+    stdio: mcp ? ['pipe', 'pipe', 'inherit'] : 'inherit',
     env: { ...process.env, PLAYWRITER_DIRECT: direct },
   });
+  const feedback = mcp ? proxyMcp(child, ports.gate) : null;
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(signal, () => child.kill(signal));
   }
@@ -376,9 +627,9 @@ async function main(argv) {
     console.error(`playwriter-project: ${error.message}`);
     process.exit(1);
   });
-  child.on('exit', (code, signal) => {
+  child.on('close', (code, signal) => {
     lease.destroy();
-    process.exit(code ?? (signal ? 1 : 0));
+    Promise.resolve(feedback?.flushed()).then(() => process.exit(code ?? (signal ? 1 : 0)));
   });
 }
 
