@@ -149,7 +149,7 @@ const check = (label) => {
   console.log(`lifecycle: ${checks} checks passed`);
 })()
   .then(() => {
-    fs.rmSync(PROJ, { recursive: true, force: true });
+    fs.rmSync(PROJ, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
     process.exit(0);
   })
   .catch((error) => {
