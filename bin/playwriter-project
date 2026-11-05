@@ -20,6 +20,7 @@ const PLAYWRITER_BIN = path.join(PLAYWRITER_DIR, 'bin.js');
 const HOST = '127.0.0.1';
 const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
 const GONE_AFTER_PROBES = 3;
+const CHILD_EXIT_MS = 1500;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
 
 function findUp(start, name) {
@@ -746,6 +747,7 @@ function proxyMcp(child, ports) {
   process.stdin.on('end', () => {
     fromClient.end();
     child.stdin.end();
+    setTimeout(() => child.kill('SIGTERM'), CHILD_EXIT_MS).unref();
   });
 
   const fromChild = lineReader((line) => {
