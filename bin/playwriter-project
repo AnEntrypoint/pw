@@ -356,7 +356,14 @@ function runGate({ gate, debug }) {
 
   const ensureChrome = async () => {
     if (stopping) await stopping;
-    if (chromeUp) return;
+    if (chromeUp && await probe()) return;
+    if (chromeUp) {
+      chromeUp = false;
+      browser = null;
+      missedProbes = 0;
+      dropSockets();
+      log('browser stopped answering; starting it again');
+    }
     starting ??= (async () => {
       if (await probe()) adopt();
       else await startChrome();
