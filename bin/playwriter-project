@@ -98,6 +98,13 @@ async function waitFor(check, ms) {
   return false;
 }
 
+function browserLogTail(from) {
+  const text = fs.readFileSync(BROWSER_LOG).subarray(from).toString('utf8');
+  const handoff = text.includes('Opening in existing browser session') ? 'the launcher handed off to an already-running Chromium' : 'no handoff line in browser.log';
+  const tail = text.split('\n').filter(Boolean).slice(-8).join(' | ');
+  return handoff + '; log tail: ' + tail;
+}
+
 function portFree(port) {
   return new Promise((resolve) => {
     const probe = net.createServer();
@@ -318,13 +325,15 @@ function runGate({ gate, debug }) {
     fs.appendFileSync(BROWSER_LOG, '');
     const from = fs.statSync(BROWSER_LOG).size;
     const out = fs.openSync(BROWSER_LOG, 'a');
+    let exited = null;
     chromeProc = spawn(bin, args, { detached: true, stdio: ['ignore', out, out] });
     chromeProc.on('error', (error) => log(`browser spawn error: ${error.message}`));
+    chromeProc.once('exit', (code, signal) => { exited = code ?? signal; });
     chromeProc.unref();
     fs.closeSync(out);
     log(`browser started pid=${chromeProc.pid} profile=${PROFILE}`);
     const refused = () => fs.readFileSync(BROWSER_LOG).subarray(from).includes('No usable sandbox');
-    await waitFor(async () => (await probe()) || refused(), 30000);
+    await waitFor(async () => (await probe()) || refused() || exited !== null, 30000);
     if (await probe()) {
       const pid = listenerPid(debug) ?? (pidAlive(chromeProc.pid) ? chromeProc.pid : null);
       if (pid === null) throw new Error(`browser answered on port ${debug} but its pid could not be read; see ${BROWSER_LOG}`);
@@ -340,6 +349,7 @@ function runGate({ gate, debug }) {
     if (refused()) {
       throw new Error('browser refused to start: no usable sandbox. Set PLAYWRITER_NO_SANDBOX=1 and restart the agent (manual, chapter 9).');
     }
+    if (exited !== null) throw new Error(`browser exited (${exited}) before opening debug port ${debug}: ${browserLogTail(from)}`);
     throw new Error(`browser did not open debug port ${debug}; see ${BROWSER_LOG}`);
   };
 
