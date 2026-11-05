@@ -38,7 +38,7 @@ const until = async (check, ms = 8000) => {
 };
 
 function mcpClient() {
-  const child = spawn(WRAPPER, [], { cwd: PROJ, env: ENV, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [WRAPPER], { cwd: PROJ, env: ENV, stdio: ['pipe', 'pipe', 'pipe'] });
   const waiters = new Map();
   let buf = '';
   child.stdout.on('data', (chunk) => {
