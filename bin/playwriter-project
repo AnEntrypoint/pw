@@ -199,9 +199,18 @@ function listenerPid(port) {
 function pidAlive(pid) {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return error.code === 'EPERM';
+  }
+  const state = process.platform === 'linux' ? readRaw(`/proc/${pid}/stat`)?.split(') ')[1]?.[0] : null;
+  return state !== 'Z' && state !== 'X';
+}
+
+function readRaw(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
   }
 }
 
