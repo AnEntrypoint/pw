@@ -40,6 +40,7 @@ const STATE = path.join(PROJECT, '.playwriter');
 const PROFILE = path.join(STATE, 'browser-profile');
 const GATE_LOG = path.join(STATE, 'gate.log');
 const BROWSER_LOG = path.join(STATE, 'browser.log');
+const LINUX_CHROMIUM = '/usr/lib/chromium/chromium.real';
 const BROWSER_PID = path.join(STATE, 'browser.pid');
 
 const USAGE = [
@@ -235,6 +236,7 @@ function liveProfileOwner() {
 
 async function resolveBrowser() {
   const config = await import(pathToFileURL(path.join(PLAYWRITER_DIR, 'dist', 'browser-config.js')).href);
+  if (process.platform === 'linux' && !process.env.PLAYWRITER_BROWSER_PATH && fs.existsSync(LINUX_CHROMIUM)) process.env.PLAYWRITER_BROWSER_PATH = LINUX_CHROMIUM;
   try {
     return config.resolveBrowserExecutablePath();
   } catch {
