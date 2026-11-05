@@ -499,6 +499,7 @@ function runGate({ gate, debug }) {
         log(`probe failed ${missedProbes}/${GONE_AFTER_PROBES}`);
       }
     }
+    if (leaseHolders.size > 0) touch();
     const idle = Date.now() - lastActivity;
     if (chromeUp && idle >= IDLE_MS) {
       if (browser?.adopted) {

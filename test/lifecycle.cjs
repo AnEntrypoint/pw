@@ -98,14 +98,14 @@ const check = (label) => {
   check('first tool call opens the browser');
 
   await sleep(IDLE_MS + 4000);
-  assert.equal(await chromeUp(), false);
+  assert.equal(await chromeUp(), true);
   assert.equal(fs.existsSync(path.join(STATE, 'browser-profile')), true);
-  check('browser stops after idle and keeps its profile directory');
+  check('a held MCP lease keeps the browser open past the idle time');
 
   const reuse = await m.exec(4, "return (await context.cookies('http://example.test/')).map((c) => c.name + '=' + c.value)");
   assert.match(reuse, /keep=yes/);
   assert.equal(await chromeUp(), true);
-  check('same MCP session reconnects after idle and the cookie survived');
+  check('same MCP session still has the cookie');
 
   const listed = JSON.parse((await m.call(5, 'tools/call', { name: 'browsers', arguments: { action: 'list' } })).result.content[0].text);
   assert.equal(listed.browsers.supported, true);
@@ -117,7 +117,7 @@ const check = (label) => {
   check('browsers close stops the project browser when no other lease is held');
 
   m.close();
-  await sleep(IDLE_MS + 8000);
+  await until(async () => !(await gateUp()), IDLE_MS + 30000);
   assert.equal(await gateUp(), false);
   assert.equal(await chromeUp(), false);
   check('gate exits and the browser stays closed once the agent disconnects');
