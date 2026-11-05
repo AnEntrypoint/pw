@@ -40,7 +40,7 @@ jobs:
           CHROME_PID: ${{ steps.chrome.outputs.pid }}
         run: |
           node -e '
-            const s = require("./status.json");
+            const s = require("./status.json").browsers;
             const pid = Number(process.env.CHROME_PID);
             if (s.supported !== true) throw new Error("scan not supported: " + s.error);
             const hit = s.browsers.find((b) => b.pid === pid);
@@ -54,9 +54,3 @@ jobs:
           CHROME_PID: ${{ steps.chrome.outputs.pid }}
         run: |
           if ($env:CHROME_PID) { Stop-Process -Id ([int]$env:CHROME_PID) -Force -ErrorAction SilentlyContinue }
-      - name: List processes still running from the test project
-        if: always()
-        shell: pwsh
-        run: |
-          Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'pw-test|playwriter|chrom' } |
-            Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List | Out-String -Width 400 | Write-Host
