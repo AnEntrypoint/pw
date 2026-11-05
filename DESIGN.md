@@ -1,9 +1,7 @@
 # Design notes
 
-## Browser scan on Windows is unverified
+## Browser scan on Windows is verified in CI
 
-`lib/browsers.js` lists Windows processes with PowerShell `Get-CimInstance Win32_Process`, and the command-line tokenizer `windowsArgv` is covered only by an isolated check. The PowerShell path has never run on a Windows host.
+`.github/workflows/windows-scan.yml` runs on windows-latest: `test/lifecycle.cjs` (12 of 12), then `status --json` with a headless Chrome that the job starts and later stops by its PID. The check passes only if the scan reports `supported: true` and lists that PID. Passing run: 42044467037 (commit after 0df3952, on AnEntrypoint/pw main).
 
-Decision: accept Linux-only verification for this change, recorded here by the pw owner. Linux checks: `test/lifecycle.cjs` passes 12 of 12 and `status` lists browsers on Linux.
-
-To close the gap, run `node bin/playwriter-project status` on Windows with a running browser, and confirm the browser, its owner and its profile are listed. If the scan fails there, the result reports `supported: false` with the error.
+Windows fixes that the run required: the MCP check runs the wrapper through node; the project folder is removed with retries; the test stops only the CDP relay it started, because the relay inherits the project folder as its working directory and holds it on Windows.
