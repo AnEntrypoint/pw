@@ -54,3 +54,9 @@ jobs:
           CHROME_PID: ${{ steps.chrome.outputs.pid }}
         run: |
           if ($env:CHROME_PID) { Stop-Process -Id ([int]$env:CHROME_PID) -Force -ErrorAction SilentlyContinue }
+      - name: List processes still running from the test project
+        if: always()
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'pw-test|playwriter|chrom' } |
+            Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List | Out-String -Width 400 | Write-Host
