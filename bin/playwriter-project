@@ -196,7 +196,16 @@ function listenerPid(port) {
   return null;
 }
 
-async function liveProfileOwner() {
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+function liveProfileOwner() {
   let lock;
   try {
     lock = fs.readlinkSync(path.join(PROFILE, 'SingletonLock'));
@@ -204,10 +213,7 @@ async function liveProfileOwner() {
     return null;
   }
   const pid = Number(/-(\d+)$/.exec(lock)?.[1]) || null;
-  if (pid === null) return null;
-  const { browsers } = await listBrowsers({ fresh: true });
-  const owner = browsers.find((browser) => browser.pid === pid && browser.profile && path.resolve(browser.profile) === PROFILE);
-  return owner ? owner.pid : null;
+  return pid !== null && pidAlive(pid) ? pid : null;
 }
 
 async function resolveBrowser() {
@@ -283,10 +289,11 @@ function runGate({ gate, debug }) {
 
   const startChrome = async () => {
     fs.mkdirSync(PROFILE, { recursive: true });
-    const owner = await liveProfileOwner();
+    const owner = liveProfileOwner();
     if (owner) {
-      log(`relaunch refused: profile lock held by live browser pid ${owner}`);
-      throw new Error(`profile ${PROFILE} is held by live browser pid ${owner}; not relaunching`);
+      log(`start deferred: profile lock held by live pid ${owner}`);
+      if (await waitFor(probe, 30000)) return adopt();
+      throw new Error(`profile ${PROFILE} is held by live pid ${owner}, which does not answer on port ${debug}; not starting another browser`);
     }
     const bin = await resolveBrowser();
     const args = [
@@ -309,8 +316,9 @@ function runGate({ gate, debug }) {
     const refused = () => fs.readFileSync(BROWSER_LOG).subarray(from).includes('No usable sandbox');
     await waitFor(async () => (await probe()) || refused(), 30000);
     if (await probe()) {
-      const pid = listenerPid(debug) ?? chromeProc.pid;
-      const owner = await liveProfileOwner();
+      const pid = listenerPid(debug) ?? (pidAlive(chromeProc.pid) ? chromeProc.pid : null);
+      if (pid === null) throw new Error(`browser answered on port ${debug} but its pid could not be read; see ${BROWSER_LOG}`);
+      const owner = liveProfileOwner();
       if (owner !== null && owner !== pid) {
         browser = { pid, source: 'adopted', adopted: true, warning: `browser pid ${pid} on debug port ${debug} is not the browser this gate started (pid ${owner}); it was not stopped` };
         return;
