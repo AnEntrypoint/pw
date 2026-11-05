@@ -1,0 +1,56 @@
+name: windows-scan
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: npm ci
+      - name: Lifecycle tests
+        run: node test/lifecycle.cjs
+      - name: Start a Chrome owned by this job
+        id: chrome
+        shell: pwsh
+        run: |
+          $profileDir = Join-Path $env:RUNNER_TEMP 'pw-scan-profile'
+          $chrome = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+          $proc = Start-Process -FilePath $chrome -PassThru -ArgumentList @(
+            '--headless=new', '--no-first-run', '--no-sandbox',
+            "--user-data-dir=$profileDir", '--remote-debugging-port=9333', 'about:blank'
+          )
+          "pid=$($proc.Id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "profile=$profileDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Start-Sleep -Seconds 5
+      - name: Scan browsers
+        shell: bash
+        run: node bin/playwriter-project status --json > status.json; cat status.json
+      - name: Check the scan lists this job's Chrome
+        shell: bash
+        env:
+          CHROME_PID: ${{ steps.chrome.outputs.pid }}
+        run: |
+          node -e '
+            const s = require("./status.json");
+            const pid = Number(process.env.CHROME_PID);
+            if (s.supported !== true) throw new Error("scan not supported: " + s.error);
+            const hit = s.browsers.find((b) => b.pid === pid);
+            if (!hit) throw new Error("scan did not list Chrome pid " + pid + "; saw " + s.browsers.map((b) => b.pid).join(","));
+            console.log("listed pid", hit.pid, "port", hit.port ?? "-");
+          '
+      - name: Stop the Chrome by its PID
+        if: always()
+        shell: pwsh
+        env:
+          CHROME_PID: ${{ steps.chrome.outputs.pid }}
+        run: |
+          if ($env:CHROME_PID) { Stop-Process -Id ([int]$env:CHROME_PID) -Force -ErrorAction SilentlyContinue }
