@@ -42,6 +42,7 @@ const GATE_LOG = path.join(STATE, 'gate.log');
 const BROWSER_LOG = path.join(STATE, 'browser.log');
 const LINUX_BROWSERS = ['/opt/google/chrome/chrome', '/usr/lib/chromium/chromium.real'];
 const BROWSER_PID = path.join(STATE, 'browser.pid');
+const WEBGPU_LABS = ['enable-unsafe-webgpu', 'enable-vulkan@1', 'enable-webgpu-developer-features'];
 
 const USAGE = [
   'usage: playwriter-project [start | status [--json] | session [flags] | help | playwriter-args...]',
@@ -53,10 +54,18 @@ const USAGE = [
   'install:    npx -y add-mcp "npx -y github:AnEntrypoint/pw" -n playwriter --all -g -y',
   'env:        PLAYWRITER_PROJECT_DIR (default: nearest ancestor of cwd with .playwriter, else with .git, else cwd),',
   '            PLAYWRITER_BROWSER_PATH, PLAYWRITER_NO_SANDBOX=1,',
+  '            PLAYWRITER_WEBGPU=1 turns on the WebGPU labs in this project profile before Chromium starts, fresh or not,',
   `            PLAYWRITER_IDLE_MS (default ${IDLE_MS}: browser stops after this long with no traffic)`,
 ].join('\n');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const logTail = (file) => {
+  try {
+    return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-6).join(' | ') || '(empty)';
+  } catch {
+    return '(no log)';
+  }
+};
 const log = (line) => fs.appendFileSync(GATE_LOG, `${new Date().toISOString()} ${line}\n`);
 const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, ...options });
 
@@ -242,8 +251,8 @@ async function resolveBrowser() {
   }
   try {
     return config.resolveBrowserExecutablePath();
-  } catch {
-    log('no browser found: running playwriter browser install');
+  } catch (error) {
+    log(`no browser found (${error.message}): running playwriter browser install`);
     const out = fs.openSync(BROWSER_LOG, 'a');
     const code = await new Promise((resolve) => {
       const child = playwriterSpawn(['browser', 'install'], { stdio: ['ignore', out, out] });
@@ -251,9 +260,29 @@ async function resolveBrowser() {
       child.on('exit', (exitCode) => resolve(exitCode ?? 1));
     });
     fs.closeSync(out);
-    if (code !== 0) throw new Error(`browser install failed (exit ${code}); see ${BROWSER_LOG}`);
+    if (code !== 0) throw new Error(`browser install failed (exit ${code}); see ${BROWSER_LOG}: ${logTail(BROWSER_LOG)}`);
     return config.resolveBrowserExecutablePath();
   }
+}
+
+function seedLabs(profile, labs) {
+  fs.mkdirSync(profile, { recursive: true });
+  const file = path.join(profile, 'Local State');
+  let state = {};
+  if (fs.existsSync(file)) {
+    try {
+      state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (error) {
+      throw new Error(`cannot seed the WebGPU labs: ${file} is not JSON (${error.message})`);
+    }
+  }
+  const browser = state.browser && typeof state.browser === 'object' ? state.browser : {};
+  const before = Array.isArray(browser.enabled_labs_experiments) ? browser.enabled_labs_experiments : [];
+  const labsOn = [...before, ...labs.filter((flag) => !before.includes(flag))];
+  if (labsOn.length === before.length && fs.existsSync(file)) return false;
+  fs.writeFileSync(file, JSON.stringify({ ...state, browser: { ...browser, enabled_labs_experiments: labsOn } }));
+  log(`seeded WebGPU labs into ${file}`);
+  return true;
 }
 
 function runGate({ gate, debug }) {
@@ -317,6 +346,7 @@ function runGate({ gate, debug }) {
       if (await waitFor(probe, 30000)) return adopt();
       throw new Error(`profile ${PROFILE} is held by live pid ${owner}, which does not answer on port ${debug}; not starting another browser`);
     }
+    if (process.env.PLAYWRITER_WEBGPU === '1') seedLabs(PROFILE, WEBGPU_LABS);
     const bin = await resolveBrowser();
     const args = [
       `--user-data-dir=${PROFILE}`,
@@ -355,7 +385,7 @@ function runGate({ gate, debug }) {
       throw new Error('browser refused to start: no usable sandbox. Set PLAYWRITER_NO_SANDBOX=1 and restart the agent (manual, chapter 9).');
     }
     if (exited !== null) throw new Error(`browser exited (${exited}) before opening debug port ${debug}: ${browserLogTail(from)}`);
-    throw new Error(`browser did not open debug port ${debug}; see ${BROWSER_LOG}`);
+    throw new Error(`browser did not open debug port ${debug}; see ${BROWSER_LOG}: ${logTail(BROWSER_LOG)}`);
   };
 
   const adopt = () => {
@@ -581,7 +611,7 @@ async function ensureGate(port) {
   gate.unref();
   fs.closeSync(out);
   if (!(await waitFor(() => httpOk(port, '/__pwp/ping'), 5000))) {
-    throw new Error(`gate did not start on port ${port}; see ${GATE_LOG}`);
+    throw new Error(`gate did not start on port ${port}; see ${GATE_LOG}: ${logTail(GATE_LOG)}`);
   }
 }
 
