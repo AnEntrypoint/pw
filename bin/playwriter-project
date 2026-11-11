@@ -5,7 +5,7 @@ const http = require('node:http');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, execFile, execFileSync } = require('node:child_process');
 const { listBrowsers, browserLines, browserReport } = require('../lib/browsers');
 
 let PLAYWRITER_DIR;
@@ -36,7 +36,9 @@ const CHROME_TRIMS = [
   '--use-mock-keychain',
   '--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,AcceptCHFrame,ImprovedCookieControls',
   '--process-per-site',
+  '--renderer-process-limit=1',
 ];
+const IDLE_CHECK_MS = 2000;
 const GONE_AFTER_PROBES = 3;
 const CHILD_EXIT_MS = 1500;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
@@ -277,14 +279,24 @@ function liveProfileOwner() {
   return pid !== null && pidAlive(pid) ? pid : null;
 }
 
+function resolveFromConfig() {
+  const url = pathToFileURL(path.join(PLAYWRITER_DIR, 'dist', 'browser-config.js')).href;
+  const script = "import(process.argv[1]).then((config) => process.stdout.write(config.resolveBrowserExecutablePath()), (error) => { process.stderr.write(error.message); process.exit(1); });";
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, ['-e', script, url], { env: process.env, encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (error) return reject(new Error((stderr || error.message).trim()));
+      resolve(stdout.trim());
+    });
+  });
+}
+
 async function resolveBrowser() {
-  const config = await import(pathToFileURL(path.join(PLAYWRITER_DIR, 'dist', 'browser-config.js')).href);
   if (process.platform === 'linux' && !process.env.PLAYWRITER_BROWSER_PATH) {
     const preferred = LINUX_BROWSERS.find((candidate) => fs.existsSync(candidate));
     if (preferred) process.env.PLAYWRITER_BROWSER_PATH = preferred;
   }
   try {
-    return config.resolveBrowserExecutablePath();
+    return await resolveFromConfig();
   } catch (error) {
     log(`no browser found (${error.message}): running playwriter browser install`);
     const out = fs.openSync(BROWSER_LOG, 'a');
@@ -295,7 +307,7 @@ async function resolveBrowser() {
     });
     fs.closeSync(out);
     if (code !== 0) throw new Error(`browser install failed (exit ${code}); see ${BROWSER_LOG}: ${logTail(BROWSER_LOG)}`);
-    return config.resolveBrowserExecutablePath();
+    return resolveFromConfig();
   }
 }
 
@@ -333,6 +345,8 @@ function runGate({ gate, debug }) {
   let everLeased = false;
   let graceTimer = null;
   let pagesClosed = false;
+  let lastLeaseEvent = Date.now();
+  const totalBusy = () => [...leaseHolders.values()].reduce((sum, lease) => sum + lease.busy, 0);
 
   const touch = () => {
     lastActivity = Date.now();
@@ -600,15 +614,26 @@ function runGate({ gate, debug }) {
     if (route === '/__pwp/close' && req.method === 'POST') return respondJson(res, closeFromCaller(params));
     if (route === '/__pwp/lease') {
       const id = ++leaseSeq;
-      leaseHolders.set(id, { pid: Number(req.headers['x-pwp-pid']) || null, since: Date.now() });
+      leaseHolders.set(id, { pid: Number(req.headers['x-pwp-pid']) || null, since: Date.now(), busy: 0 });
       everLeased = true;
+      lastLeaseEvent = Date.now();
       clearTimeout(graceTimer);
       graceTimer = null;
       res.on('close', () => {
         leaseHolders.delete(id);
+        lastLeaseEvent = Date.now();
         if (leaseHolders.size === 0) leaseEmptied();
       });
-      return res.write('leased\n');
+      return res.write(`leased ${id}\n`);
+    }
+    if (route === '/__pwp/busy') {
+      const lease = leaseHolders.get(Number(params.get('id')));
+      if (lease) {
+        lease.busy = Math.max(0, lease.busy + Number(params.get('delta')));
+        lastLeaseEvent = Date.now();
+        touch();
+      }
+      return res.end('ok\n');
     }
     touch();
     ensureChrome().then(() => proxyHttp(req, res), (error) => fail(res, error));
@@ -631,6 +656,14 @@ function runGate({ gate, debug }) {
     return pages.length;
   };
 
+  const closeBlankTabs = async () => {
+    const pages = ((await httpJson(debug, '/json/list', 3000)) ?? []).filter((target) => target.type === 'page');
+    const blank = pages.filter((page) => page.url === 'about:blank');
+    if (pages.length > blank.length && blank.length > 0) {
+      for (const page of blank) await httpGet(debug, `/json/close/${page.id}`, 3000);
+    }
+  };
+
   const tick = async () => {
     if (chromeUp) {
       if (await probe()) {
@@ -646,9 +679,11 @@ function runGate({ gate, debug }) {
       }
     }
     const idle = Date.now() - lastActivity;
-    if (chromeUp && !pagesClosed && leaseHolders.size > 0 && idle >= PAGE_IDLE_MS) {
+    if (chromeUp && !pagesClosed && leaseHolders.size > 0 && totalBusy() === 0 && idle >= PAGE_IDLE_MS) {
       pagesClosed = true;
       log(`closed ${await closePages()} idle page(s); the browser stays up for the lease`);
+    } else if (chromeUp && !pagesClosed) {
+      await closeBlankTabs();
     }
     if (chromeUp && idle >= IDLE_MS && leaseHolders.size === 0) {
       if (browser?.adopted) {
@@ -660,6 +695,10 @@ function runGate({ gate, debug }) {
     }
     if (!everLeased && !chromeUp && leaseHolders.size === 0 && idle >= IDLE_MS) {
       log('gate exiting: never leased, idle');
+      process.exit(0);
+    }
+    if (everLeased && !chromeUp && totalBusy() === 0 && Date.now() - lastLeaseEvent >= GRACE_MS) {
+      log('gate exiting: browser down and no call in flight');
       process.exit(0);
     }
   };
@@ -702,8 +741,10 @@ function openLease(port) {
       socket.write(`GET /__pwp/lease HTTP/1.1\r\nHost: ${HOST}\r\nX-Pwp-Pid: ${process.pid}\r\n\r\n`);
     });
     socket.on('data', (chunk) => {
-      if (granted || !chunk.toString().includes('leased')) return;
+      const id = /leased (\d+)/.exec(chunk.toString())?.[1];
+      if (granted || !id) return;
       granted = true;
+      socket.leaseId = Number(id);
       resolve(socket);
     });
     socket.on('error', reject);
@@ -859,6 +900,9 @@ function proxyMcp(ports, direct) {
   const client = { init: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'playwriter-project', version: '0' } } };
   let child = null;
   let lease = null;
+  let idleTimer = null;
+  let browserSeen = false;
+  let inFlight = 0;
   let finished = false;
   let out = Promise.resolve();
   let forwarded = Promise.resolve();
@@ -878,9 +922,9 @@ function proxyMcp(ports, direct) {
   });
   const takePending = (id) => {
     const key = JSON.stringify(id);
-    const method = pending.get(key);
+    const entry = pending.get(key);
     pending.delete(key);
-    return method;
+    return entry;
   };
 
   const finish = (code, signal) => {
@@ -891,45 +935,101 @@ function proxyMcp(ports, direct) {
   };
 
   const gateLease = () => {
-    lease ??= acquireLease(ports.gate).catch((error) => {
-      lease = null;
-      throw error;
-    });
+    if (!lease) {
+      const pendingLease = acquireLease(ports.gate).catch((error) => {
+        if (lease === pendingLease) lease = null;
+        throw error;
+      });
+      lease = pendingLease;
+      pendingLease.then((socket) => {
+        socket.once('close', () => {
+          if (lease === pendingLease) lease = null;
+          if (inFlight === 0) retire();
+        });
+      }, () => {});
+    }
     return lease;
+  };
+
+  const markBusy = (socket, delta) => httpGet(ports.gate, `/__pwp/busy?id=${socket.leaseId}&delta=${delta}`, 2000);
+
+  const callDone = (ticket) => {
+    inFlight -= 1;
+    if (ticket.counted) markBusy(ticket.socket, -1);
+  };
+
+  const retire = () => {
+    clearInterval(idleTimer);
+    idleTimer = null;
+    browserSeen = false;
+    if (child) {
+      const retiring = child;
+      child = null;
+      retiring.stdin.end();
+      setTimeout(() => retiring.kill('SIGTERM'), CHILD_EXIT_MS).unref();
+    }
+    if (lease) {
+      const dropped = lease;
+      lease = null;
+      dropped.then((socket) => socket.destroy(), () => {});
+    }
+  };
+
+  const checkIdle = async () => {
+    if (!child || inFlight > 0) return;
+    const status = await httpJson(ports.gate, '/__pwp/status?pages=0', 2000);
+    if (status?.browser?.running) browserSeen = true;
+    else if (browserSeen && child && inFlight === 0) retire();
   };
 
   const fromChild = lineReader((line) => {
     const msg = parseFrame(line);
     if (msg?.id === INIT_ID) return;
-    const method = msg?.id === undefined ? undefined : takePending(msg.id);
-    if (method === 'tools/call' && Array.isArray(msg.result?.content)) return answer(msg);
+    const entry = msg?.id === undefined ? undefined : takePending(msg.id);
+    if (entry?.method === 'tools/call') {
+      callDone(entry.ticket);
+      if (Array.isArray(msg.result?.content)) return answer(msg);
+    }
     queue(() => process.stdout.write(`${line}\n`));
   });
 
   const ensureChild = () => {
     if (child) return child;
-    child = playwriterSpawn([], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, PLAYWRITER_DIRECT: direct } });
-    child.stdin.on('error', () => {});
-    child.on('error', (error) => {
+    const started = playwriterSpawn([], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, PLAYWRITER_DIRECT: direct } });
+    child = started;
+    started.stdin.on('error', () => {});
+    started.on('error', (error) => {
       console.error(`playwriter-project: ${error.message}`);
-      finish(1, null);
+      if (started === child) finish(1, null);
     });
-    child.on('close', (code, signal) => finish(code, signal));
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => fromChild.push(chunk));
-    child.stdout.on('end', () => fromChild.end());
-    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: INIT_ID, method: 'initialize', params: client.init })}\n`);
-    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
-    return child;
+    started.on('close', (code, signal) => {
+      if (started === child) finish(code, signal);
+    });
+    started.stdout.setEncoding('utf8');
+    started.stdout.on('data', (chunk) => fromChild.push(chunk));
+    started.stdout.on('end', () => fromChild.end());
+    started.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: INIT_ID, method: 'initialize', params: client.init })}\n`);
+    started.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+    idleTimer ??= setInterval(() => {
+      checkIdle().catch((error) => console.error(`playwriter-project: idle check failed: ${error.message}`));
+    }, IDLE_CHECK_MS);
+    idleTimer.unref();
+    return started;
   };
 
-  const forward = (line, msg) => {
+  const forward = (line, msg, ticket) => {
+    if (msg.method === 'tools/call') inFlight += 1;
     forwarded = forwarded.then(async () => {
-      if (msg.method === 'tools/call') await gateLease();
+      if (msg.method === 'tools/call') {
+        ticket.socket = await gateLease();
+        await markBusy(ticket.socket, 1);
+        ticket.counted = true;
+      }
       ensureChild().stdin.write(`${line}\n`);
     }).catch((error) => {
       console.error(`playwriter-project: ${error.message}`);
       if (msg.id !== undefined) write({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: error.message } });
+      if (msg.method === 'tools/call') callDone(ticket);
     });
   };
 
@@ -943,8 +1043,9 @@ function proxyMcp(ports, direct) {
     if (msg.method === 'notifications/initialized') return;
     if (msg.method === 'tools/list' && msg.id !== undefined) return write({ jsonrpc: '2.0', id: msg.id, result: { tools: [...MCP_TOOLS.tools, BROWSERS_TOOL] } });
     if (msg.method === 'tools/call' && msg.params?.name === 'browsers' && msg.id !== undefined) return answerBrowsers(msg);
-    if (msg.method === 'tools/call' && msg.id !== undefined) pending.set(JSON.stringify(msg.id), msg.method);
-    forward(line, msg);
+    const ticket = { counted: false, socket: null };
+    if (msg.id !== undefined) pending.set(JSON.stringify(msg.id), { method: msg.method, ticket });
+    forward(line, msg, ticket);
   });
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => fromClient.push(chunk));
