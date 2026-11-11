@@ -19,6 +19,7 @@ const PLAYWRITER_BIN = path.join(PLAYWRITER_DIR, 'bin.js');
 
 const HOST = '127.0.0.1';
 const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
+const GRACE_MS = 5000;
 const GONE_AFTER_PROBES = 3;
 const CHILD_EXIT_MS = 1500;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
@@ -47,7 +48,7 @@ const WEBGPU_LABS = ['enable-unsafe-webgpu', 'enable-vulkan@1', 'enable-webgpu-d
 const USAGE = [
   'usage: playwriter-project [start | status [--json] | session [flags] | help | playwriter-args...]',
   '  (no args)  playwriter MCP server bound to this project browser (use in .mcp.json); each tool result ends with a status block',
-  '  start      open this project browser now; it also opens on first use',
+  '  start      open this project browser and check it answers; it stops when no session holds a lease',
   '  status     show the gate, every Chromium browser on this machine, and the pages of this project; --json prints JSON',
   '  session    create a CLI session bound to this project browser',
   '  <args>     run `playwriter <args>` bound to this project browser',
@@ -296,6 +297,8 @@ function runGate({ gate, debug }) {
   let starting = null;
   let stopping = null;
   const sockets = new Set();
+  let everLeased = false;
+  let graceTimer = null;
 
   const touch = () => {
     lastActivity = Date.now();
@@ -452,6 +455,30 @@ function runGate({ gate, debug }) {
     return stopping;
   };
 
+  const releaseBrowser = async () => {
+    if (!chromeUp) return;
+    if (browser?.adopted) {
+      chromeUp = false;
+      browser = null;
+      return;
+    }
+    await stopChrome('last lease released');
+  };
+
+  const exitUnleased = () => {
+    graceTimer = null;
+    if (leaseHolders.size > 0) return;
+    log('gate exiting: no lease for the grace period');
+    process.exit(0);
+  };
+
+  const leaseEmptied = () => {
+    log('last lease released');
+    releaseBrowser().then(() => {
+      if (leaseHolders.size === 0) graceTimer ??= setTimeout(exitUnleased, GRACE_MS);
+    });
+  };
+
   const closeFromCaller = async (params) => {
     const wanted = params.get('pid');
     const others = [...leaseHolders.values()].filter((lease) => String(lease.pid) !== params.get('self'));
@@ -537,7 +564,13 @@ function runGate({ gate, debug }) {
     if (route === '/__pwp/lease') {
       const id = ++leaseSeq;
       leaseHolders.set(id, { pid: Number(req.headers['x-pwp-pid']) || null, since: Date.now() });
-      res.on('close', () => leaseHolders.delete(id));
+      everLeased = true;
+      clearTimeout(graceTimer);
+      graceTimer = null;
+      res.on('close', () => {
+        leaseHolders.delete(id);
+        if (leaseHolders.size === 0) leaseEmptied();
+      });
       return res.write('leased\n');
     }
     touch();
@@ -579,8 +612,8 @@ function runGate({ gate, debug }) {
         await stopChrome();
       }
     }
-    if (!chromeUp && leaseHolders.size === 0 && idle >= IDLE_MS) {
-      log('gate exiting: no leases, browser stopped');
+    if (!everLeased && !chromeUp && leaseHolders.size === 0 && idle >= IDLE_MS) {
+      log('gate exiting: never leased, idle');
       process.exit(0);
     }
   };
@@ -618,13 +651,32 @@ async function ensureGate(port) {
 function openLease(port) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(port, HOST);
+    let granted = false;
     socket.once('connect', () => {
       socket.write(`GET /__pwp/lease HTTP/1.1\r\nHost: ${HOST}\r\nX-Pwp-Pid: ${process.pid}\r\n\r\n`);
+    });
+    socket.on('data', (chunk) => {
+      if (granted || !chunk.toString().includes('leased')) return;
+      granted = true;
       resolve(socket);
     });
-    socket.once('error', reject);
-    socket.on('error', () => {});
+    socket.on('error', reject);
+    socket.on('close', () => {
+      if (!granted) reject(new Error(`gate on port ${port} did not grant a lease`));
+    });
   });
+}
+
+async function acquireLease(port) {
+  for (let attempt = 1; ; attempt++) {
+    await ensureGate(port);
+    try {
+      return await openLease(port);
+    } catch (error) {
+      if (attempt >= 5) throw error;
+      await sleep(300);
+    }
+  }
 }
 
 function gateHeader(status) {
@@ -780,18 +832,37 @@ function proxyMcp(child, ports) {
     return method;
   };
 
+  let lease = null;
+  const gateLease = () => {
+    lease ??= acquireLease(ports.gate).catch((error) => {
+      lease = null;
+      throw error;
+    });
+    return lease;
+  };
+  let forwarded = Promise.resolve();
+  const forward = (line, needsGate, id) => {
+    forwarded = forwarded.then(async () => {
+      if (needsGate) await gateLease();
+      child.stdin.write(`${line}\n`);
+    }).catch((error) => {
+      console.error(`playwriter-project: ${error.message}`);
+      if (id !== undefined) send({ jsonrpc: '2.0', id, error: { code: -32000, message: error.message } });
+    });
+  };
+
   const fromClient = lineReader((line) => {
     const msg = parseFrame(line);
     if (msg?.method === 'tools/call' && msg.params?.name === 'browsers' && msg.id !== undefined) return answerBrowsers(msg);
     if ((msg?.method === 'tools/call' || msg?.method === 'tools/list') && msg.id !== undefined) pending.set(JSON.stringify(msg.id), msg.method);
-    child.stdin.write(`${line}\n`);
+    forward(line, msg?.method === 'tools/call' && msg.params?.name !== 'browsers', msg?.id);
   });
   child.stdin.on('error', () => {});
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => fromClient.push(chunk));
   process.stdin.on('end', () => {
     fromClient.end();
-    child.stdin.end();
+    forwarded.then(() => child.stdin.end());
     setTimeout(() => child.kill('SIGTERM'), CHILD_EXIT_MS).unref();
   });
 
@@ -810,6 +881,9 @@ function proxyMcp(child, ports) {
 
   return {
     flushed: () => out.then(() => new Promise((resolve) => process.stdout.write('', resolve))),
+    release: () => {
+      lease?.then((socket) => socket.destroy(), () => {});
+    },
   };
 }
 
@@ -819,10 +893,30 @@ async function main(argv) {
   if (argv[0] === 'status') return status(argv.includes('--json'));
 
   const ports = await loadPorts();
-  await ensureGate(ports.gate);
-  const lease = await openLease(ports.gate);
   const base = `${HOST}:${ports.gate}`;
   const direct = `ws://${base}/devtools/browser/`;
+
+  if (argv.length === 0) {
+    const child = playwriterSpawn([], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      env: { ...process.env, PLAYWRITER_DIRECT: direct },
+    });
+    const feedback = proxyMcp(child, ports);
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+      process.on(signal, () => child.kill(signal));
+    }
+    child.on('error', (error) => {
+      console.error(`playwriter-project: ${error.message}`);
+      process.exit(1);
+    });
+    child.on('close', (code, signal) => {
+      feedback.release();
+      Promise.resolve(feedback.flushed()).then(() => process.exit(code ?? (signal ? 1 : 0)));
+    });
+    return;
+  }
+
+  const lease = await acquireLease(ports.gate);
 
   if (argv[0] === 'start') {
     const res = await fetch(`http://${base}/json/version`, { signal: AbortSignal.timeout(60000) });
@@ -833,12 +927,10 @@ async function main(argv) {
 
   const newSession = argv[0] === 'session' && (argv.length === 1 || argv[1].startsWith('-'));
   const forwarded = newSession ? ['session', 'new', '--direct', direct, ...argv.slice(1)] : argv;
-  const mcp = forwarded.length === 0;
   const child = playwriterSpawn(forwarded, {
-    stdio: mcp ? ['pipe', 'pipe', 'inherit'] : 'inherit',
+    stdio: 'inherit',
     env: { ...process.env, PLAYWRITER_DIRECT: direct },
   });
-  const feedback = mcp ? proxyMcp(child, ports) : null;
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(signal, () => child.kill(signal));
   }
@@ -848,7 +940,7 @@ async function main(argv) {
   });
   child.on('close', (code, signal) => {
     lease.destroy();
-    Promise.resolve(feedback?.flushed()).then(() => process.exit(code ?? (signal ? 1 : 0)));
+    process.exit(code ?? (signal ? 1 : 0));
   });
 }
 

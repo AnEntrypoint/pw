@@ -110,9 +110,9 @@ const check = (label) => {
   const tools = await m.call(2, 'tools/list', {});
   assert.ok(tools.result.tools.some((tool) => tool.name === 'browsers'));
   await sleep(1500);
-  assert.equal(await gateUp(), true);
+  assert.equal(await gateUp(), false);
   assert.equal(await chromeUp(), false);
-  check('startup opens no browser');
+  check('listing tools starts no gate and no browser');
 
   const set = await m.exec(3, "state.page ??= await context.newPage(); await state.page.goto('data:text/html,<title>keep</title>'); await context.addCookies([{ name: 'keep', value: 'yes', url: 'http://example.test/', expires: Math.floor(Date.now() / 1000) + 86400 }]); return 'set'");
   assert.match(set, /set/);

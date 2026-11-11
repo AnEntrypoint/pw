@@ -7,7 +7,8 @@
     "playwriter-project": "bin/playwriter-project"
   },
   "scripts": {
-    "test": "node test/lifecycle.cjs"
+    "test": "node test/lifecycle.cjs && node test/leases.cjs",
+    "witness": "node test/memory.cjs"
   },
   "engines": {
     "node": ">=22"

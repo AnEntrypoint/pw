@@ -12,7 +12,7 @@ Install, once. It needs only add-mcp, run through npx:
 
 `-g` is user level. `--all` writes every agent add-mcp supports. Use `-a claude-code` for one agent.
 
-Each agent gets an MCP entry named `playwriter`. The first tool call starts a gate for the project. The gate listens on 127.0.0.1, starts Chrome when a request arrives, and closes it when idle.
+Each agent gets an MCP entry named `playwriter`. Listing tools starts nothing; the first call to a browser tool starts a gate for the project and takes a lease on it. The gate listens on 127.0.0.1 and starts Chrome when a request arrives. Each launcher holds one lease, released when its launcher exits, including when it is killed. When the last lease is released, the gate stops the browser it started, waits 5 seconds for a new lease, and exits. A gate that never had a lease exits after the idle time.
 
 The project is the first of these that applies: `PLAYWRITER_PROJECT_DIR`; the nearest folder that holds `.playwriter`, searched upwards from the current directory; the nearest folder that holds `.git`; the current directory. A command run from a subdirectory therefore uses the same gate and profile as one run from the root. A gate that answers for another project is refused, and never adopted.
 
