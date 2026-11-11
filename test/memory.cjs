@@ -33,7 +33,7 @@ async function scenario(name, useBrowser) {
       if (!/ready/.test(text)) throw new Error(`execute did not answer: ${text}`);
       await sleep(SETTLE_MS);
       out.afterBrowserUse = summarize(proj);
-      await sleep(PAGE_IDLE_MS + SETTLE_MS);
+      await sleep(PAGE_IDLE_MS + 15000);
       out.afterPageIdle = summarize(proj);
       out.reopened = await session.exec("const page = await context.newPage(); await page.goto('data:text/html,<title>again</title>'); return await page.title()");
       out.afterReopen = summarize(proj);
