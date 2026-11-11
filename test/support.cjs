@@ -131,7 +131,7 @@ function mcpSession(proj, env = {}) {
     },
     async exec(code) {
       const msg = await call('tools/call', { name: 'execute', arguments: { code } });
-      return (msg.result?.content ?? []).map((part) => part.text).join('');
+      return (msg.result?.content ?? []).map((part) => part.text).join('') || JSON.stringify(msg);
     },
     async end(ms = 15000) {
       child.stdin.end();
