@@ -20,6 +20,23 @@ const PLAYWRITER_BIN = path.join(PLAYWRITER_DIR, 'bin.js');
 const HOST = '127.0.0.1';
 const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
 const GRACE_MS = 5000;
+const PAGE_IDLE_MS = Number(process.env.PLAYWRITER_PAGE_IDLE_MS) || 60000;
+const CHROME_TRIMS = [
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-component-update',
+  '--disable-default-apps',
+  '--disable-sync',
+  '--disable-breakpad',
+  '--disable-dev-shm-usage',
+  '--metrics-recording-only',
+  '--mute-audio',
+  '--no-service-autorun',
+  '--password-store=basic',
+  '--use-mock-keychain',
+  '--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,AcceptCHFrame,ImprovedCookieControls',
+  '--process-per-site',
+];
 const GONE_AFTER_PROBES = 3;
 const CHILD_EXIT_MS = 1500;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
@@ -315,9 +332,11 @@ function runGate({ gate, debug }) {
   const sockets = new Set();
   let everLeased = false;
   let graceTimer = null;
+  let pagesClosed = false;
 
   const touch = () => {
     lastActivity = Date.now();
+    pagesClosed = false;
   };
   const probe = () => httpOk(debug, '/json/version');
   const gone = async () => !(await probe());
@@ -372,7 +391,9 @@ function runGate({ gate, debug }) {
       `--remote-debugging-port=${debug}`,
       '--no-first-run',
       '--no-default-browser-check',
+      ...CHROME_TRIMS,
     ];
+    if (process.env.PLAYWRITER_WEBGPU !== '1') args.push('--disable-gpu');
     if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) args.push('--headless=new');
     if (process.env.PLAYWRITER_NO_SANDBOX) args.push('--no-sandbox');
     args.push('about:blank');
@@ -604,6 +625,12 @@ function runGate({ gate, debug }) {
       .catch((error) => socket.end(`HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n${error.message}`));
   });
 
+  const closePages = async () => {
+    const pages = ((await httpJson(debug, '/json/list', 3000)) ?? []).filter((target) => target.type === 'page');
+    for (const page of pages) await httpGet(debug, `/json/close/${page.id}`, 3000);
+    return pages.length;
+  };
+
   const tick = async () => {
     if (chromeUp) {
       if (await probe()) {
@@ -618,9 +645,12 @@ function runGate({ gate, debug }) {
         log(`probe failed ${missedProbes}/${GONE_AFTER_PROBES}`);
       }
     }
-    if (leaseHolders.size > 0) touch();
     const idle = Date.now() - lastActivity;
-    if (chromeUp && idle >= IDLE_MS) {
+    if (chromeUp && !pagesClosed && leaseHolders.size > 0 && idle >= PAGE_IDLE_MS) {
+      pagesClosed = true;
+      log(`closed ${await closePages()} idle page(s); the browser stays up for the lease`);
+    }
+    if (chromeUp && idle >= IDLE_MS && leaseHolders.size === 0) {
       if (browser?.adopted) {
         chromeUp = false;
         log('released adopted browser without stopping it');
