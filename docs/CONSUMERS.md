@@ -4,12 +4,12 @@ This note is for gm (defaults/mcp.json) and for each project's .mcp.json. It rep
 
 ## Pin
 
-- Pinned commit: 24646cc (AnEntrypoint/pw, main). Install form: github:AnEntrypoint/pw#24646cc.
-- Commits after 24646cc may change the static tool list; re-pin only after the tools test passes in that checkout.
+- Pinned commit: 243db69 (AnEntrypoint/pw, main). Install form: github:AnEntrypoint/pw#243db69.
+- Commits after 243db69 may change the static tool list; re-pin only after the tools test passes in that checkout.
 
 ## Direct entry (no npm exec, no shim)
 
-Check out pw at 24646cc, run `npm ci` once in that folder (the bin requires its node_modules, including playwriter 0.9.0), then register:
+Check out pw at 243db69, run `npm ci` once in that folder (the bin requires its node_modules, including playwriter 0.9.0), then register:
 
     {"command": "node", "args": ["<install>/pw/bin/playwriter-project"]}
 
@@ -17,9 +17,17 @@ Replace <install> with the absolute path of the checkout. Nothing in the bin run
 
 ## Old entry, for the transition
 
-    {"command": "npx", "args": ["-y", "-p", "github:AnEntrypoint/pw#24646cc", "playwriter-project"]}
+    {"command": "npx", "args": ["-y", "-p", "github:AnEntrypoint/pw#243db69", "playwriter-project"]}
 
 This still works but runs npm exec, a shim and node: three processes before the launcher.
+
+## Relay
+
+Sessions on this pin run in direct mode (the launcher always sets PLAYWRITER_DIRECT), and the playwriter child starts no CDP relay in direct mode. Nothing in this repo needs a relay change; a relay left by a client that does not use direct mode is outside pw.
+
+## Final pin for this round
+
+Pin: 243db69 (launcher with busy-tracked leases, idle child and gate retirement, trimmed renderers). Use github:AnEntrypoint/pw#243db69 or the direct checkout at 243db69.
 
 ## What changes for consumers
 
