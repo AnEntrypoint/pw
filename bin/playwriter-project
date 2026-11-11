@@ -23,6 +23,8 @@ const GRACE_MS = 5000;
 const GONE_AFTER_PROBES = 3;
 const CHILD_EXIT_MS = 1500;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
+const INIT_ID = 'pwp-init';
+const MCP_TOOLS = require('../lib/mcp-tools.json');
 
 function findUp(start, name) {
   for (let dir = start; ; dir = path.dirname(dir)) {
@@ -150,10 +152,24 @@ async function loadPorts() {
     const offset = crypto.createHash('sha1').update(PROJECT).digest().readUInt32BE(0) % 500;
     gate ||= await pickPort(9400, 500, offset);
     debug ||= await pickPort(9900, 500, offset);
-    fs.writeFileSync(path.join(STATE, 'port'), `${gate}\n`);
-    fs.writeFileSync(path.join(STATE, 'debug-port'), `${debug}\n`);
+    gate = claimPort('port', gate);
+    debug = claimPort('debug-port', debug);
   }
   return { gate, debug };
+}
+
+function claimPort(name, value) {
+  const file = path.join(STATE, name);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${value}\n`);
+  try {
+    fs.linkSync(tmp, file);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+  return Number(fs.readFileSync(file, 'utf8')) || value;
 }
 
 function readRecordedPid() {
@@ -808,22 +824,27 @@ async function runBrowsers(args, port) {
   };
 }
 
-function proxyMcp(child, ports) {
+function proxyMcp(ports, direct) {
   const pending = new Map();
+  const client = { init: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'playwriter-project', version: '0' } } };
+  let child = null;
+  let lease = null;
+  let finished = false;
   let out = Promise.resolve();
+  let forwarded = Promise.resolve();
+
   const queue = (task) => {
     out = out.then(task).catch((error) => console.error(`playwriter-project: feedback failed: ${error.message}`));
   };
-  const emit = (line) => queue(() => process.stdout.write(`${line}\n`));
-  const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
+  const write = (msg) => queue(() => process.stdout.write(`${JSON.stringify(msg)}\n`));
   const answer = (msg) => queue(async () => {
     msg.result.content.push({ type: 'text', text: await feedbackText(ports.gate) });
-    send(msg);
+    process.stdout.write(`${JSON.stringify(msg)}\n`);
   });
   const answerBrowsers = (msg) => queue(async () => {
     const { ok, body } = await runBrowsers(msg.params.arguments ?? {}, ports.gate).catch((error) => ({ ok: false, body: { error: error.message } }));
     const content = [{ type: 'text', text: JSON.stringify(body, null, 2) }, { type: 'text', text: await feedbackText(ports.gate) }];
-    send({ jsonrpc: '2.0', id: msg.id, result: { content, isError: !ok } });
+    write({ jsonrpc: '2.0', id: msg.id, result: { content, isError: !ok } });
   });
   const takePending = (id) => {
     const key = JSON.stringify(id);
@@ -832,7 +853,13 @@ function proxyMcp(child, ports) {
     return method;
   };
 
-  let lease = null;
+  const finish = (code, signal) => {
+    if (finished) return;
+    finished = true;
+    lease?.then((socket) => socket.destroy(), () => {});
+    out.then(() => new Promise((resolve) => process.stdout.write('', resolve))).then(() => process.exit(code ?? (signal ? 1 : 0)));
+  };
+
   const gateLease = () => {
     lease ??= acquireLease(ports.gate).catch((error) => {
       lease = null;
@@ -840,51 +867,68 @@ function proxyMcp(child, ports) {
     });
     return lease;
   };
-  let forwarded = Promise.resolve();
-  const forward = (line, needsGate, id) => {
+
+  const fromChild = lineReader((line) => {
+    const msg = parseFrame(line);
+    if (msg?.id === INIT_ID) return;
+    const method = msg?.id === undefined ? undefined : takePending(msg.id);
+    if (method === 'tools/call' && Array.isArray(msg.result?.content)) return answer(msg);
+    queue(() => process.stdout.write(`${line}\n`));
+  });
+
+  const ensureChild = () => {
+    if (child) return child;
+    child = playwriterSpawn([], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, PLAYWRITER_DIRECT: direct } });
+    child.stdin.on('error', () => {});
+    child.on('error', (error) => {
+      console.error(`playwriter-project: ${error.message}`);
+      finish(1, null);
+    });
+    child.on('close', (code, signal) => finish(code, signal));
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => fromChild.push(chunk));
+    child.stdout.on('end', () => fromChild.end());
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: INIT_ID, method: 'initialize', params: client.init })}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+    return child;
+  };
+
+  const forward = (line, msg) => {
     forwarded = forwarded.then(async () => {
-      if (needsGate) await gateLease();
-      child.stdin.write(`${line}\n`);
+      if (msg.method === 'tools/call') await gateLease();
+      ensureChild().stdin.write(`${line}\n`);
     }).catch((error) => {
       console.error(`playwriter-project: ${error.message}`);
-      if (id !== undefined) send({ jsonrpc: '2.0', id, error: { code: -32000, message: error.message } });
+      if (msg.id !== undefined) write({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: error.message } });
     });
   };
 
   const fromClient = lineReader((line) => {
     const msg = parseFrame(line);
-    if (msg?.method === 'tools/call' && msg.params?.name === 'browsers' && msg.id !== undefined) return answerBrowsers(msg);
-    if ((msg?.method === 'tools/call' || msg?.method === 'tools/list') && msg.id !== undefined) pending.set(JSON.stringify(msg.id), msg.method);
-    forward(line, msg?.method === 'tools/call' && msg.params?.name !== 'browsers', msg?.id);
+    if (!msg) return;
+    if (msg.method === 'initialize' && msg.id !== undefined) {
+      client.init = msg.params;
+      return write({ jsonrpc: '2.0', id: msg.id, result: MCP_TOOLS.initialize });
+    }
+    if (msg.method === 'notifications/initialized') return;
+    if (msg.method === 'tools/list' && msg.id !== undefined) return write({ jsonrpc: '2.0', id: msg.id, result: { tools: [...MCP_TOOLS.tools, BROWSERS_TOOL] } });
+    if (msg.method === 'tools/call' && msg.params?.name === 'browsers' && msg.id !== undefined) return answerBrowsers(msg);
+    if (msg.method === 'tools/call' && msg.id !== undefined) pending.set(JSON.stringify(msg.id), msg.method);
+    forward(line, msg);
   });
-  child.stdin.on('error', () => {});
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => fromClient.push(chunk));
   process.stdin.on('end', () => {
     fromClient.end();
-    forwarded.then(() => child.stdin.end());
-    setTimeout(() => child.kill('SIGTERM'), CHILD_EXIT_MS).unref();
+    forwarded.then(() => {
+      if (!child) return finish(0, null);
+      child.stdin.end();
+      setTimeout(() => child.kill('SIGTERM'), CHILD_EXIT_MS).unref();
+    });
   });
-
-  const fromChild = lineReader((line) => {
-    const msg = parseFrame(line);
-    const method = msg?.id === undefined ? undefined : takePending(msg.id);
-    if (method === 'tools/list' && Array.isArray(msg.result?.tools)) {
-      return emit(JSON.stringify({ ...msg, result: { ...msg.result, tools: [...msg.result.tools, BROWSERS_TOOL] } }));
-    }
-    if (method === 'tools/call' && Array.isArray(msg.result?.content)) return answer(msg);
-    emit(line);
-  });
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => fromChild.push(chunk));
-  child.stdout.on('end', () => fromChild.end());
-
-  return {
-    flushed: () => out.then(() => new Promise((resolve) => process.stdout.write('', resolve))),
-    release: () => {
-      lease?.then((socket) => socket.destroy(), () => {});
-    },
-  };
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(signal, () => (child ? child.kill(signal) : finish(0, null)));
+  }
 }
 
 async function main(argv) {
@@ -896,25 +940,7 @@ async function main(argv) {
   const base = `${HOST}:${ports.gate}`;
   const direct = `ws://${base}/devtools/browser/`;
 
-  if (argv.length === 0) {
-    const child = playwriterSpawn([], {
-      stdio: ['pipe', 'pipe', 'inherit'],
-      env: { ...process.env, PLAYWRITER_DIRECT: direct },
-    });
-    const feedback = proxyMcp(child, ports);
-    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-      process.on(signal, () => child.kill(signal));
-    }
-    child.on('error', (error) => {
-      console.error(`playwriter-project: ${error.message}`);
-      process.exit(1);
-    });
-    child.on('close', (code, signal) => {
-      feedback.release();
-      Promise.resolve(feedback.flushed()).then(() => process.exit(code ?? (signal ? 1 : 0)));
-    });
-    return;
-  }
+  if (argv.length === 0) return proxyMcp(ports, direct);
 
   const lease = await acquireLease(ports.gate);
 

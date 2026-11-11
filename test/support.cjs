@@ -129,6 +129,14 @@ function mcpSession(proj, env = {}) {
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
       return call('tools/list', {});
     },
+    async initializeOnly() {
+      const msg = await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'witness', version: '0' } });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+      return msg.result;
+    },
+    async toolsList() {
+      return (await call('tools/list', {})).result;
+    },
     async exec(code) {
       const msg = await call('tools/call', { name: 'execute', arguments: { code } });
       return (msg.result?.content ?? []).map((part) => part.text).join('') || JSON.stringify(msg);
