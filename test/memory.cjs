@@ -1,9 +1,10 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { sleep, projectProcs, summarize, stopProject, mcpSession } = require('./support.cjs');
+const { sleep, projectProcs, summarize, finishTest, mcpSession } = require('./support.cjs');
 
 const SETTLE_MS = 3000;
+const PAGE_IDLE_MS = 60000;
 const DRAIN_MS = 40000;
 const HARD_MS = 280000;
 const cleanups = new Set();
@@ -17,7 +18,7 @@ async function scenario(name, useBrowser) {
   const session = mcpSession(proj);
   const stop = async () => {
     session.stop();
-    await stopProject(proj);
+    await finishTest(`memory ${name}`);
     fs.rmSync(proj, { recursive: true, force: true });
     cleanups.delete(stop);
   };
@@ -32,6 +33,10 @@ async function scenario(name, useBrowser) {
       if (!/ready/.test(text)) throw new Error(`execute did not answer: ${text}`);
       await sleep(SETTLE_MS);
       out.afterBrowserUse = summarize(proj);
+      await sleep(PAGE_IDLE_MS + SETTLE_MS);
+      out.afterPageIdle = summarize(proj);
+      out.reopened = await session.exec("const page = await context.newPage(); await page.goto('data:text/html,<title>again</title>'); return await page.title()");
+      out.afterReopen = summarize(proj);
     }
     await session.end();
     const started = Date.now();

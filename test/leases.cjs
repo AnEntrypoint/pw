@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { sleep, projectProcs, stopProject, mcpSession } = require('./support.cjs');
+const { sleep, projectProcs, mcpSession, finishTest } = require('./support.cjs');
 
 const DEADLINE_MS = 10000;
 const OPEN = "state.page ??= await context.newPage(); return 'open'";
@@ -25,7 +25,7 @@ function makeProject() {
   const sessions = [];
   const stop = async () => {
     for (const session of sessions) session.stop();
-    await stopProject(proj);
+    await finishTest('leases');
     fs.rmSync(proj, { recursive: true, force: true });
     cleanups.delete(stop);
   };
@@ -109,6 +109,7 @@ const hard = setTimeout(async () => {
   await sigkillReleasesLease();
   await sharedGateKeepsBrowserForLastLease();
   clearTimeout(hard);
+  await finishTest('leases');
   console.log('leases: all checks passed');
   process.exit(0);
 })().catch(async (error) => {

@@ -4,35 +4,14 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const { finishTest } = require('./support.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WRAPPER = path.join(ROOT, 'bin', 'playwriter-project');
 const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-test-'));
 const STATE = path.join(PROJ, '.playwriter');
 const IDLE_MS = 4000;
-const RELAY_PORT = 19988;
 const ENV = { ...process.env, PLAYWRITER_PROJECT_DIR: PROJ, PLAYWRITER_IDLE_MS: String(IDLE_MS), PLAYWRITER_TELEMETRY: '0' };
-
-function relayPids() {
-  if (process.platform === 'win32') {
-    const script = `Get-NetTCPConnection -LocalPort ${RELAY_PORT} -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess }`;
-    const listed = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 15000, windowsHide: true });
-    return (listed.stdout ?? '').split(/\s+/).filter(Boolean).map(Number);
-  }
-  const listed = spawnSync('lsof', ['-t', `-iTCP:${RELAY_PORT}`, '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 10000 });
-  return (listed.stdout ?? '').split('\n').filter(Boolean).map(Number);
-}
-
-const relayBefore = new Set(relayPids());
-
-function stopRelayStartedHere() {
-  for (const pid of relayPids()) {
-    if (relayBefore.has(pid)) continue;
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {}
-  }
-}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const httpOk = (port, urlPath) => new Promise((resolve) => {
@@ -170,13 +149,13 @@ const check = (label) => {
   spawnSync(process.execPath, [path.join(ROOT, 'node_modules', 'playwriter', 'bin.js'), 'session', 'delete', sid], { env: ENV, encoding: 'utf8' });
   console.log(`lifecycle: ${checks} checks passed`);
 })()
-  .then(() => {
-    stopRelayStartedHere();
+  .then(async () => {
+    await finishTest('lifecycle');
     fs.rmSync(PROJ, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
     process.exit(0);
   })
-  .catch((error) => {
-    stopRelayStartedHere();
+  .catch(async (error) => {
+    await finishTest('lifecycle').catch(() => {});
     console.error(`lifecycle: FAILED: ${error.message}`);
     console.error(`project kept for inspection: ${PROJ}`);
     process.exit(1);

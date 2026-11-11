@@ -1,10 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const http = require('node:http');
+const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const WRAPPER = path.join(ROOT, 'bin', 'playwriter-project');
+
+const TOKEN = randomUUID();
+process.env.PWP_TEST_TOKEN = TOKEN;
+const TOKEN_MARK = `PWP_TEST_TOKEN=${TOKEN}\0`;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const readText = (file) => {
@@ -41,8 +45,13 @@ function projectProcs(proj) {
 }
 
 function label(row) {
+  if (row.cmd.includes('playwriter-ws-server')) return 'relay';
   if (row.cmd.includes('--gate')) return 'gate';
-  if (row.cmd.includes('--type=')) return 'browser-child';
+  const type = /--type=(\S+)/.exec(row.cmd)?.[1];
+  if (type) {
+    const sub = /--utility-sub-type=(\S+)/.exec(row.cmd)?.[1];
+    return sub ? `browser-${type}:${sub.split('.').pop()}` : `browser-${type}`;
+  }
   if (row.cmd.includes('--user-data-dir=')) return 'browser';
   if (row.cmd.includes('playwriter-project')) return 'launcher';
   return 'playwriter-mcp';
@@ -51,7 +60,12 @@ function label(row) {
 function summarize(proj) {
   const rows = projectProcs(proj);
   const byLabel = {};
-  for (const row of rows) byLabel[label(row)] = (byLabel[label(row)] ?? 0) + 1;
+  for (const row of rows) {
+    const key = label(row);
+    byLabel[key] ??= { processes: 0, rssMB: 0 };
+    byLabel[key].processes += 1;
+    byLabel[key].rssMB += Math.round(row.rssKb / 1024);
+  }
   return { processes: rows.length, rssMB: Math.round(rows.reduce((sum, row) => sum + row.rssKb, 0) / 1024), byLabel };
 }
 
@@ -78,7 +92,22 @@ async function stopPids(pids) {
   }
 }
 
-const stopProject = async (proj) => stopPids(projectProcs(proj).map((row) => row.pid));
+function ownedRows() {
+  return processTable().filter((row) => row.pid !== process.pid && row.state !== 'Z' && row.env.includes(TOKEN_MARK));
+}
+
+async function finishTest(name, { graceMs = 15000 } = {}) {
+  const end = Date.now() + graceMs;
+  let rows = ownedRows();
+  while (rows.length > 0 && Date.now() < end) {
+    await sleep(200);
+    rows = ownedRows();
+  }
+  const leftovers = rows.map((row) => `${row.pid} ${label(row)}`);
+  await stopPids(rows.map((row) => row.pid));
+  if (leftovers.length > 0) throw new Error(`${name} left its own processes behind: ${leftovers.join(', ')}`);
+  return { leftovers };
+}
 
 function mcpSession(proj, env = {}) {
   const child = spawn(process.execPath, [WRAPPER], {
@@ -153,4 +182,4 @@ function mcpSession(proj, env = {}) {
   };
 }
 
-module.exports = { sleep, projectProcs, summarize, stopProject, stopPids, alive, mcpSession };
+module.exports = { ROOT, WRAPPER, TOKEN, sleep, processTable, projectProcs, label, summarize, stopPids, alive, finishTest, ownedRows, mcpSession };

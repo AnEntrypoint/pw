@@ -2,23 +2,20 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn, spawnSync } = require('node:child_process');
-const { sleep, projectProcs, stopPids, mcpSession, stopProject } = require('./support.cjs');
+const { spawn } = require('node:child_process');
+const { sleep, projectProcs, mcpSession, finishTest, ROOT } = require('./support.cjs');
 
-const ROOT = path.resolve(__dirname, '..');
 const CHILD = path.join(ROOT, 'node_modules', 'playwriter', 'bin.js');
 const MCP_TOOLS = require(path.join(ROOT, 'lib', 'mcp-tools.json'));
-const RELAY_PORT = 19988;
-
-const relayPids = () => {
-  const listed = spawnSync('lsof', ['-t', `-iTCP:${RELAY_PORT}`, '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 10000 });
-  return (listed.stdout ?? '').split('\n').filter(Boolean).map(Number);
-};
 
 async function realChildReplies() {
-  const relayBefore = new Set(relayPids());
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-tools-'));
-  const child = spawn(process.execPath, [CHILD], { cwd: dir, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PLAYWRITER_TELEMETRY: '0' } });
+  const child = spawn(process.execPath, [CHILD], {
+    cwd: dir,
+    detached: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, PLAYWRITER_TELEMETRY: '0', PLAYWRITER_DIRECT: 'ws://127.0.0.1:9/devtools/browser/unused' },
+  });
   const replies = new Map();
   let buf = '';
   child.stdout.setEncoding('utf8');
@@ -50,8 +47,6 @@ async function realChildReplies() {
     try {
       process.kill(-child.pid, 'SIGKILL');
     } catch {}
-    const relayNew = relayPids().filter((pid) => !relayBefore.has(pid));
-    await stopPids(relayNew);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -76,12 +71,13 @@ async function realChildReplies() {
     console.log('ok 2: the launcher answers initialize and tools/list alone; no child, gate or lease yet');
   } finally {
     session.stop();
-    await stopProject(proj);
+    await finishTest('tools');
     fs.rmSync(proj, { recursive: true, force: true });
   }
+  await finishTest('tools');
   console.log('tools: all checks passed');
   process.exit(0);
-})().catch((error) => {
+})().catch(async (error) => {
   console.error(`tools: FAILED: ${error.message}`);
   process.exit(1);
 });
