@@ -14,7 +14,8 @@ const browsers = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('
 const children = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('playwriter/bin.js')).length;
 const debugPort = (proj) => Number(fs.readFileSync(path.join(proj, '.playwriter', 'debug-port'), 'utf8'));
 const answers = (port) => fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
-const retired = async (proj, port) => gates(proj) === 0 && browsers(proj) === 0 && children(proj) === 0 && !(await answers(port));
+const stopped = async (proj, port) => gates(proj) === 0 && browsers(proj) === 0 && !(await answers(port));
+const retired = async (proj, port) => stopped(proj, port) && children(proj) === 0;
 
 async function waitFor(check, ms) {
   const started = Date.now();
@@ -70,7 +71,7 @@ async function sigkillReleasesLease() {
     assert.equal(browsers(p.proj), 1);
     const port = debugPort(p.proj);
     process.kill(launcher.pid, 'SIGKILL');
-    const took = await waitFor(() => retired(p.proj, port), DEADLINE_MS);
+    const took = await waitFor(() => stopped(p.proj, port), DEADLINE_MS);
     assert.notEqual(took, null, 'gate and browser stop within 10 s of a SIGKILLed launcher, and nothing answers on the debug port');
     console.log(`ok: SIGKILLed launcher releases its lease; gate and browser gone and debug port silent in ${took} ms`);
   } finally {
@@ -97,7 +98,7 @@ async function sharedGateKeepsBrowserForLastLease() {
     assert.match(await b.exec("return 'still-open'"), /still-open/);
     console.log('ok: killing one of two launchers keeps the shared gate and browser for the other');
     process.kill(b.pid, 'SIGKILL');
-    const took = await waitFor(() => retired(p.proj, port), DEADLINE_MS);
+    const took = await waitFor(() => stopped(p.proj, port), DEADLINE_MS);
     assert.notEqual(took, null, 'gate and browser stop within 10 s once both launchers are dead, and nothing answers on the debug port');
     console.log(`ok: killing both launchers stops the gate and browser, debug port silent, in ${took} ms`);
   } finally {
