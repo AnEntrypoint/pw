@@ -26,10 +26,11 @@ Round 5 (launcher leak, extension witness, memory):
 - bin/playwriter-project and lib/browsers.js (L1, commit 26174f5): a gate owns the browser that holds its profile lock or its recorded pid. An owned browser, including one a SIGKILLed gate started, is closed when the restarted gate exits; a foreign browser is never stopped. Witness: npm run orphan (test/orphan.cjs) prints both scenarios with after exit 0 and restarted gate owns browser: true.
 - test/orphan.cjs (L2, commit 69d34cc): the witness for L1, with the pid file kept and with it dropped. Witness: npm run orphan prints the process count at baseline, after kill, after restart and after exit, exit 0.
 - test/mode.cjs (X1, commit eb853a0): the launcher path selects direct CDP and never reaches the extension branch (dist/executor.js:764). Witness: npm run mode prints extensionsConnected 0, relays 0, and childrenWithDirectUrl equal to executorChildren, exit 0.
-- test/memory.cjs (M2, npm run witness): exit 0 is required. The result is red; see the Phase B results below.
+- test/memory.cjs (M2, npm run witness): exit 0 is required; the Phase B results before option 1 record it red.
+- test/memory.cjs (M3, option 1, the change in this commit): the uses-browser scenario closes its reopened page and state.page before session.end(), so the scenario exits instead of waiting for PLAYWRITER_IDLE_MS. The product keeps open pages open (F1 needs it); idle retirement stays covered by test/lifecycle.cjs and test/leases.cjs. Witness: the node test/memory.cjs row of the Phase B results after option 1.
 - The defensive patch (33d11b1 through 146b3ae) stays in place in this round and is not reverted.
 
-Phase B results (commit after eb853a0 plus this doc change; nothing pushed; wall times from /tmp/f1-phaseb/phase-b.sh):
+Phase B results before option 1 (commit after eb853a0 plus this doc change; nothing pushed; wall times from /tmp/f1-phaseb/phase-b.sh):
 
 - npm test: exit 0, wall 126273 ms. Output ends with "lifecycle: 12 checks passed" and "leases: all checks passed".
 - npm run f1: exit 0, wall 7974 ms. Output: "F1 defaultHas=true executorIsDefault=true contexts=1" and "firstPageSurvivedGateKill: true".
@@ -37,5 +38,4 @@ Phase B results (commit after eb853a0 plus this doc change; nothing pushed; wall
 - npm run mode: exit 0, wall 5429 ms. Output: mode: {"executeReply":"opened","extensionsConnected":0,"relays":0,"executorChildren":1,"childrenWithDirectUrl":1,"selected":"direct CDP (dist/executor.js:737)","notReached":"extension branch (dist/executor.js:764)","wallMs":2198}
 - node test/memory.cjs (M2): exit 1, wall 147693 ms. Output: "memory: FAILED: memory uses-browser left its own processes behind: 494863 gate, 494894 playwriter-mcp, 494896 playwriter-mcp". Red. The same failure reproduces on a41c6af, so it predates Round 5. Cause: the uses-browser scenario ends with a caller page still open; an open page holds the browser until PLAYWRITER_IDLE_MS (300 s) when no lease is held, and memory.cjs waits 40 s for drain.
 
-Open: Phase B is not green, so nothing is pushed. Decision needed: close state.page before session.end() in the uses-browser scenario of test/memory.cjs (consistent with 7f94353), or change the product so an open page does not hold the browser after the session ends (conflicts with the F1 requirement that an opened page stays open).
-Experiment (not committed; the test change was reverted, and its diff is kept at /tmp/memory-option1.patch): with the uses-browser scenario closing state.page and the reopened page before session.end(), node test/memory.cjs exits 0 in 97082 ms, with drainMs 5112 and afterSessionEnd processes 0. This is the recommended option; the decision is still open.
+Decision: option 1, chosen for this round. The uses-browser scenario of test/memory.cjs closes its pages before session.end(), so it exits instead of waiting for PLAYWRITER_IDLE_MS. The change was re-derived from the tree; /tmp/memory-option1.patch was not applied.

@@ -35,8 +35,9 @@ async function scenario(name, useBrowser) {
       out.afterBrowserUse = summarize(proj);
       await sleep(PAGE_IDLE_MS + 15000);
       out.afterPageIdle = summarize(proj);
-      out.reopened = await session.exec("const page = await context.newPage(); await page.goto('data:text/html,<title>again</title>'); return await page.title()");
+      out.reopened = await session.exec("const page = await context.newPage(); await page.goto('data:text/html,<title>again</title>'); const title = await page.title(); await page.close(); return title");
       out.afterReopen = summarize(proj);
+      await session.exec("await state.page.close(); return 'closed'");
     }
     await session.end();
     const started = Date.now();
