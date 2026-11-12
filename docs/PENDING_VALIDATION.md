@@ -315,3 +315,19 @@ Defects fixed in Phase A (commit f54098c):
 Not changed, for the owner to decide: the gate treats three consecutive failed probes as the browser having gone, and drops its state and sockets while Chrome may still run. A loaded host where /json/version takes more than 3 s on three probes in a row triggers this. The gate log now names the reason, so the reproduction under load will show whether this path fires. If it does, whether a slow browser should count as gone is a design decision.
 
 No witness was run in Phase A, as instructed. The Phase B reproduction under load follows.
+
+## Item 1 Phase B under load: the loop on f54098c, the full set on 8830f05
+
+- Load: 12 busy loops (`sh -c 'while :; do :; done'`), started by me as gm job `pb-loadloop` (script /tmp/pwb-loadloop.sh, logdir /tmp/tmp.XLBIJXO5Ge, tree 8830f05, 12 cores). Load PIDs 1507020 to 1507031, each under `timeout 1500`. Load average before the loop 4.26 4.04 3.63. The load average printed with each run is the 1, 5 and 15 minute value read right after that run ended.
+- Loop: `node test/lifecycle.cjs`, up to 10 runs, each under `timeout 400` on its own PID, stopping at the first failure. Result: 10 of 10 exit 0. The loop stopped nowhere, kept no directory and wrote no failure.txt, so there was nothing to read.
+  - Runs (exit, wall, load average after the run): 1 0 49786 ms (13.62 6.59 4.51); 2 0 50680 ms (18.90 9.08 5.47); 3 0 52211 ms (22.02 11.58 6.54); 4 0 51742 ms (21.15 13.10 7.33); 5 0 49220 ms (21.18 14.41 8.08); 6 0 47778 ms (14.40 13.74 8.16); 7 0 47370 ms (8.70 12.35 7.99); 8 0 51493 ms (16.58 13.91 8.75); 9 0 48781 ms (15.63 14.09 9.08); 10 0 46690 ms (15.85 14.33 9.40).
+  - Walls: 46690 to 52211 ms under load, against 41293 to 43447 ms for the quiet loop on 8bacc58 (above). The runs were slower under load and none failed.
+- Load stopped by PID: the script's exit trap ran `kill` and then `wait` on each of the 12 PIDs. Afterwards none of 1507020 to 1507031 was listed.
+- Item 1 stays open: not reproduced in 10 runs under load (load average up to 22.02). The failed debug-port probe at 19:25:34Z is still unexplained and is not recorded as a flake. The gate's gone-after-3-probes policy is unchanged, for the owner.
+
+Full set once on 8830f05 (code f54098c, record 8830f05), job `pb-fullset-p1`, logdir /tmp/tmp.7n3UYOTzaY, `timeout 3300 node scripts/phase-b.cjs --watch <logdir>` over 16 rows. Runner exit 0, runner worst exit 0, wall 548356 ms, leftover 0 on every row.
+- Rows (exit, wall ms): npm-test 0 207090; f1 0 7906; orphan 0 26550; mode 0 4853; memory 0 96178; phase-b 0 17733; start-refusal 0 6226; signal 0 1693; stale-replace 0 5686; stale-held 0 6982; stale-unanswering 0 18563; stale-nosandbox 0 27468; lifecycle-nosandbox 0 41253; lifecycle-forced-check11 0 34772; lifecycle-forced-cleanup 0 41596; stale-foreign 0 3370.
+- The two forced rows exit 0 because their witnesses expect the forced failure. Their kept directories are by design: /tmp/pw-test-l7cFky (check11, failure.txt starts `failure: forced failure at check 11 (PWP_LIFECYCLE_FORCE=check11)`, written 23:08:16Z) and /tmp/pw-test-t7zXej (cleanup, failure.txt starts `failure: forced failure in cleanup (PWP_LIFECYCLE_FORCE=cleanup)`, written 23:08:57Z). Neither was deleted. /tmp/pw-test-pDLZtt and /tmp/pw-test-fc2RDZ were kept too.
+- After the full set: no pw-test-, pw-stale- or foreign-server process left; none of the load PIDs; gm's gate pid 1180507 alive and untouched; nothing listens on port 2531.
+- Item 4: no `2531` as a whole word in /tmp/tmp.XLBIJXO5Ge or /tmp/tmp.7n3UYOTzaY. It stays open, as recorded in b0a0d57.
+- Longest step: the full-set runner, 548356 ms (9 min 8 s). Its longest row was npm-test, 207090 ms.
