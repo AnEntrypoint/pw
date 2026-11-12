@@ -292,3 +292,26 @@ Conclusion for item 4: open.
 Full set once on 8bacc58 (logdir /tmp/tmp.wP2PQghkQt): runner worst exit 0, wall 541082 ms, leftover 0 on every row. Rows: npm-test 195604 ms, f1 7885, orphan 26538, mode 4882, memory 96314, phase-b 17883, start-refusal 6673, signal 1726, stale-replace 6449, stale-held 7864, stale-unanswering 18680, stale-nosandbox 28818, lifecycle-nosandbox 41527, lifecycle-forced-check11 34701, lifecycle-forced-cleanup 41705, stale-foreign 3355 ms, all exit 0.
 
 Item 4: no new evidence. The new logs (/tmp/tmp.yf9mO3xS6O, /tmp/tmp.wP2PQghkQt and the two job outputs) contain no `2531` as a whole word. No process from these runs was alive afterward, gm’s gate pid 1180507 is alive, and nothing listens on port 2531. Item 4 stays as recorded in b0a0d57.
+
+## Item 1, Phase A: the probe timing under load (code read, nothing run)
+
+Read: test/lifecycle.cjs (probeOnce, readPort, chromeUp, gateUp, gateStatus, until, the checks and the failure handler) and the launcher probe path in bin/playwriter-project (httpGet, httpOk, httpJson, the gate tick). Commit f54098c has the code.
+
+Fixed timeouts and waits a loaded host could exceed, before this change:
+- test/lifecycle.cjs: PROBE_TIMEOUT_MS 3000, one attempt per probe of /json/version and /__pwp/ping. gateStatus timeout 3000, one attempt; a timeout returns null.
+- test/lifecycle.cjs: until default 8000 ms, used for the first positive wait after the first call (`until(chromeUp)`). Now 15000 ms.
+- test/lifecycle.cjs: until 10000 ms on the held-lease check, the debug-port checks after the held lease and after the reuse, and the browsers-list check (kept; these retry).
+- test/lifecycle.cjs: sleep(1500) before the initial negatives; sleep(IDLE_MS + 4000) before the held check and before the CLI idle check; sleep(IDLE_MS + 8000) before the final check (kept as lower bounds).
+- test/lifecycle.cjs: five single-shot negatives after fixed waits or calls: after browsers close, after the agent disconnect, after the CLI idle sleep, and in the final check (two probes). They had no retry. Now bounded: 10000 to 15000 ms.
+- test/lifecycle.cjs: mcpClient call timeout 90000 ms; cli spawnSync 120000 ms; until(gateUp, IDLE_MS + 30000) (kept).
+- test/support.cjs: finishTest graceMs 15000 ms for owned processes to exit on their own, then stopPids sends SIGTERM, waits 1500 ms, and sends SIGKILL (kept).
+- bin/playwriter-project (gate): httpGet default timeout 3000 ms for the browser probe, /json/list and /json/close. GONE_AFTER_PROBES 3 with the tick every IDLE_MS/4 (1 s): three consecutive failed probes, each up to 3 s, mark the browser gone, drop its sockets and set browser to null while Chrome may still run. GRACE_MS 5000. waitFor limits of 5000 ms (gate ping at start), 30000 ms (line 446) and 15000 ms (stop, line 1167). gone waits of 10000 and 5000 ms (lines 469, 471). Status calls with 1000 ms (lines 860, 917, 1161), 2000 ms (lines 866, 1044, 1195, 1205) and 3000 ms (line 868).
+
+Defects fixed in Phase A (commit f54098c):
+1. The failure path could lose failure.txt. readPort threw when a port file was missing, gateStatus then rejected, and the failure handler awaited it with no catch (12a74ad had removed the `.catch(() => null)` I had added earlier). Now readPort returns 0, probeOnce reports `no port file for <name>` as its reason, and gateStatus resolves null without a port.
+2. Five negative checks read once after a fixed wait, so a loaded host that had not yet stopped the browser or the gate failed with reason `ok`. They now wait with until. The first positive wait after the first call moved from 8 s to 15 s.
+3. The gate discarded the reason of its browser probe. httpGet returned null for a refused connection, a timeout and a bad response alike, so `probe failed 1/3` named no cause. httpGet now resolves `{ error }` with the reason, the gate tick logs it, and `browser went away` carries the last reason. httpOk and httpJson return the same values as before.
+
+Not changed, for the owner to decide: the gate treats three consecutive failed probes as the browser having gone, and drops its state and sockets while Chrome may still run. A loaded host where /json/version takes more than 3 s on three probes in a row triggers this. The gate log now names the reason, so the reproduction under load will show whether this path fires. If it does, whether a slow browser should count as gone is a design decision.
+
+No witness was run in Phase A, as instructed. The Phase B reproduction under load follows.
