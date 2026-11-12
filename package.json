@@ -10,7 +10,9 @@
     "postinstall": "patch-package --error-on-fail",
     "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs",
     "witness": "node test/memory.cjs",
-    "f1": "node test/firstpage.cjs"
+    "f1": "node test/firstpage.cjs",
+    "orphan": "node test/orphan.cjs",
+    "mode": "node test/mode.cjs"
   },
   "engines": {
     "node": ">=22"
