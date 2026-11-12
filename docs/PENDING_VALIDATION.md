@@ -229,3 +229,17 @@ Lifecycle failure report (977174c, Phase A; Phase B on 12a74ad):
   - From about 22:03 UTC (actionSeq 2673 on): read-only checks for item 10 and the ancestry check above, and one next_context call with no task argument to read the pending job events.
 
 - Phase B for item 10: pending, recorded below after the run.
+
+## Item 10 Phase B result: stale-foreign on 4798aa1
+
+- `node test/stale.cjs foreign`, alone, under `timeout 300` on its PID: exit 0, wall 3368 ms. Witness output: `ok: a process on the gate port that is not this project gate is not signalled, and no lease is taken on it` and `stale: all checks passed`.
+- Rerun alone: exit 0, wall 3366 ms, the same output.
+- Leftover: 0. No pw-stale-* process, no foreign-server process and no /tmp/pw-stale-* directory before or after either run, and the witness finishTest passed.
+- Gate 2531: no TCP listener on port 2531 and no process with pid 2531 before the run, after it, and after the full set. It was not present at any point, so nothing survived and nothing was signalled. The witness uses its own stub on a free port and never port 2531.
+- gm gate pid 1180507 (/workspace/gm): alive before and after every step. It was not touched.
+- Full set once, with stale-foreign now a row (logdir /tmp/tmp.0DJU5NUqzB, tree 4798aa1): runner worst exit 0, wall 541507 ms, leftover 0 on every row. Rows: npm-test 196090 ms, f1 8003, orphan 26788, mode 4964, memory 96469, phase-b 17826, start-refusal 6469, signal 1709, stale-replace 6157, stale-held 7278, stale-unanswering 18602, stale-nosandbox 27557, lifecycle-nosandbox 41442, lifecycle-forced-check11 36611, lifecycle-forced-cleanup 41675, stale-foreign 3364.
+- Item 10 is done: stale-foreign is green on origin/main with gm be9909f. Item 3 (sandboxed launch) stays open, for the owner’s host setting.
+
+## gm run b8bdb4: steps after the Phase A record (step 4, continued)
+
+- 22:03 to 22:20 UTC (actionSeq 2716 to 2763): Phase A commit 4798aa1; job pb-foreign1 (stale-foreign alone, 3368 ms); job pb-foreign-final (foreign rerun alone, 3366 ms; full set, 541507 ms); this docs commit and the push. The run is not finished and its task is unchanged.
