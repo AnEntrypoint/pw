@@ -167,3 +167,9 @@ Lifecycle failure at 19:25:34Z: cause and fix.
   - Full set once (logdir /tmp/tmp.VkkQVWX8KB; worst exit 0; leftover 0 on every row): npm test 194162 ms, f1 7827 ms, orphan 26431 ms, mode 4880 ms, memory 96222 ms, phase-b 17715 ms, start-refusal 6302 ms, signal 1694 ms, stale-replace 6092 ms, stale-held 7222 ms, stale-unanswering 18570 ms, stale-nosandbox 27711 ms, lifecycle-nosandbox 43523 ms. Not run: stale-foreign (item 10), which waits on gm's kill-scope fix.
   - Longest step of this round: npm test in the full set, 194162 ms.
   - Reproduction: six runs on the fixed tree passed, and the pre-fix code was not rerun. The original failure did not reproduce, so the transient cause of the one failed probe is still unrecorded. What is established is the defect in the witness: one unretried probe decided "browser down" while the gate's state showed the browser and lease intact.
+
+Lifecycle probe reasons (cfbadf1): the open cause, the failed debug-port probe, is not recorded in any earlier run.
+
+- Change: test/lifecycle.cjs has one probe helper, probeOnce, for the debug port and the gate ping. It resolves ok or not ok, and it records the reason in a per-probe count and a last reason: "ok", "timeout after 3000 ms on port N", "connection error CODE on port N" (the error code from Node, or its message when there is none), or "HTTP STATUS". The per-probe report prints on success as "probes:" and on failure as "probes:", followed by "gate status:". The gate status is read before finishTest stops the gate, because finishTest stops it.
+- Why: the failed probe's reason was discarded, because the old httpOk returned a bare boolean, so the open cause cannot be recovered from the 19:25:34Z run. Any future probe failure now names its reason in the failure output.
+- Phase B for this change is recorded below, with the probe reasons from the loaded runs.
