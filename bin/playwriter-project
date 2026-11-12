@@ -89,6 +89,12 @@ const logTail = (file) => {
   }
 };
 const log = (line) => fs.appendFileSync(GATE_LOG, `${new Date().toISOString()} ${line}\n`);
+const gateFailureSince = (from) => {
+  const text = fs.existsSync(GATE_LOG) ? fs.readFileSync(GATE_LOG).subarray(from).toString('utf8') : '';
+  const marker = 'browser start failed: ';
+  const line = text.split('\n').find((item) => item.includes(marker));
+  return line ? line.slice(line.indexOf(marker) + marker.length) : null;
+};
 const browserFingerprint = () => [process.env.PLAYWRITER_BROWSER_PATH || LINUX_BROWSERS.find((candidate) => fs.existsSync(candidate)) || '', process.env.PLAYWRITER_NO_SANDBOX ? 'no-sandbox' : '', process.env.PLAYWRITER_WEBGPU === '1' ? 'webgpu' : ''].join('|');
 const isCallerPage = (target) => target.type === 'page' && !target.url.startsWith('about:') && !target.url.startsWith('chrome://') && !target.url.startsWith('devtools://');
 const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, ...options });
@@ -505,7 +511,10 @@ function runGate({ gate, debug }) {
       else await startChrome();
       chromeUp = true;
       missedProbes = 0;
-    })().finally(() => {
+    })().catch((error) => {
+      log(`browser start failed: ${error.message}`);
+      throw error;
+    }).finally(() => {
       starting = null;
     });
     return starting;
@@ -1186,11 +1195,23 @@ async function main(argv) {
   const lease = await acquireLease(ports.gate);
 
   if (argv[0] === 'start') {
-    const ready = await waitFor(() => httpOk(ports.gate, '/json/version', 2000), 60000);
-    console.error(ready ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed (no answer on port ${ports.gate} within 60 s)`);
-    if (ready) await httpGet(ports.gate, `/__pwp/hold?ms=${IDLE_MS}`, 2000);
+    const from = fs.existsSync(GATE_LOG) ? fs.statSync(GATE_LOG).size : 0;
+    let outcome = null;
+    const until = Date.now() + 60000;
+    while (outcome === null && Date.now() < until) {
+      if (await httpOk(ports.gate, '/json/version', 2000)) {
+        outcome = { ready: true };
+      } else {
+        const reason = gateFailureSince(from);
+        if (reason !== null) outcome = { ready: false, reason };
+        else await sleep(200);
+      }
+    }
+    outcome ??= { ready: false, reason: `no answer on port ${ports.gate} within 60 s` };
+    console.error(outcome.ready ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed: ${outcome.reason}`);
+    if (outcome.ready) await httpGet(ports.gate, `/__pwp/hold?ms=${IDLE_MS}`, 2000);
     lease.destroy();
-    process.exit(ready ? 0 : 1);
+    process.exit(outcome.ready ? 0 : 1);
   }
 
   const newSession = argv[0] === 'session' && (argv.length === 1 || argv[1].startsWith('-'));
