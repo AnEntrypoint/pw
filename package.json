@@ -8,7 +8,7 @@
   },
   "scripts": {
     "postinstall": "patch-package --error-on-fail",
-    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs && node test/signals.cjs && node test/fallback.cjs && node test/ready.cjs",
+    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs && node test/signals.cjs && node test/fallback.cjs && node test/ready.cjs && node test/stale.cjs",
     "witness": "node test/memory.cjs",
     "f1": "node test/firstpage.cjs",
     "orphan": "node test/orphan.cjs",
@@ -16,7 +16,11 @@
     "signals": "node test/signals.cjs",
     "fallback": "node test/fallback.cjs",
     "ready": "node test/ready.cjs",
-    "phase-b": "node test/phase-b.cjs"
+    "phase-b": "node test/phase-b.cjs",
+    "stale-replace": "node test/stale.cjs replace",
+    "stale-held": "node test/stale.cjs held",
+    "stale-unanswering": "node test/stale.cjs unanswering",
+    "stale-foreign": "node test/stale.cjs foreign"
   },
   "engines": {
     "node": ">=22"
