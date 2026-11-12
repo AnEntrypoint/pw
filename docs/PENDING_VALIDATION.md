@@ -20,3 +20,21 @@ Round 3 (idle held lease, renderers, gate RSS):
 Round 4 (first-open page survives a gate restart):
 
 - patches/playwriter+0.9.0.patch (F1, applied to node_modules/playwriter 0.9.0 by the postinstall patch-package --error-on-fail; test/patch.cjs fails when it is missing): connectToBrowser in dist/executor.js (direct and extension branches, lines 737 and 764) and src/executor.ts (973 and 1010) takes the first page in the default context through defaultBrowserContext when browser.contexts() is empty, instead of browser.newContext(). The headless branch is unchanged. Witness: npm test passes with test/patch.cjs first, and npm run f1 (test/firstpage.cjs) prints firstPageSurvivedGateKill: true after the gate SIGKILL and restart. Open: the same repro passes without the patch, and a zero-window Chrome probe also keeps the page in the default context unpatched, so the loss the owner reports is not reproduced (see docs/UPSTREAM_PLAYWRITER.md). F1 closes only with the owner repro.
+
+Round 5 (launcher leak, extension witness, memory):
+
+- bin/playwriter-project and lib/browsers.js (L1, commit 26174f5): a gate owns the browser that holds its profile lock or its recorded pid. An owned browser, including one a SIGKILLed gate started, is closed when the restarted gate exits; a foreign browser is never stopped. Witness: npm run orphan (test/orphan.cjs) prints both scenarios with after exit 0 and restarted gate owns browser: true.
+- test/orphan.cjs (L2, commit 69d34cc): the witness for L1, with the pid file kept and with it dropped. Witness: npm run orphan prints the process count at baseline, after kill, after restart and after exit, exit 0.
+- test/mode.cjs (X1, commit eb853a0): the launcher path selects direct CDP and never reaches the extension branch (dist/executor.js:764). Witness: npm run mode prints extensionsConnected 0, relays 0, and childrenWithDirectUrl equal to executorChildren, exit 0.
+- test/memory.cjs (M2, npm run witness): exit 0 is required. The result is red; see the Phase B results below.
+- The defensive patch (33d11b1 through 146b3ae) stays in place in this round and is not reverted.
+
+Phase B results (commit after eb853a0 plus this doc change; nothing pushed; wall times from /tmp/f1-phaseb/phase-b.sh):
+
+- npm test: exit 0, wall 126273 ms. Output ends with "lifecycle: 12 checks passed" and "leases: all checks passed".
+- npm run f1: exit 0, wall 7974 ms. Output: "F1 defaultHas=true executorIsDefault=true contexts=1" and "firstPageSurvivedGateKill: true".
+- npm run orphan: exit 0, wall 27462 ms. Output: "orphan pid file kept: baseline 0 -> started 13 -> after kill 11 -> after restart 13 -> after exit 0; restarted gate owns browser: true; wall 13870 ms" and "orphan pid file dropped: baseline 0 -> started 13 -> after kill 11 -> after restart 13 -> after exit 0; restarted gate owns browser: true; wall 13435 ms".
+- npm run mode: exit 0, wall 5429 ms. Output: mode: {"executeReply":"opened","extensionsConnected":0,"relays":0,"executorChildren":1,"childrenWithDirectUrl":1,"selected":"direct CDP (dist/executor.js:737)","notReached":"extension branch (dist/executor.js:764)","wallMs":2198}
+- node test/memory.cjs (M2): exit 1, wall 147693 ms. Output: "memory: FAILED: memory uses-browser left its own processes behind: 494863 gate, 494894 playwriter-mcp, 494896 playwriter-mcp". Red. The same failure reproduces on a41c6af, so it predates Round 5. Cause: the uses-browser scenario ends with a caller page still open; an open page holds the browser until PLAYWRITER_IDLE_MS (300 s) when no lease is held, and memory.cjs waits 40 s for drain.
+
+Open: Phase B is not green, so nothing is pushed. Decision needed: close state.page before session.end() in the uses-browser scenario of test/memory.cjs (consistent with 7f94353), or change the product so an open page does not hold the browser after the session ends (conflicts with the F1 requirement that an opened page stays open).
