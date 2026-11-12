@@ -140,3 +140,8 @@ Round 10 (the open queue after Round 9: the nosandbox rows, package.json, the pa
   - Not run: npm run stale-foreign (item 10), deferred until gm's kill-scope fix lands.
 - Push: withheld. Phase B did not run every listed row (stale-foreign), so the push condition is not met. Local, unpushed commits: 1821835, ae75d1a, 9cae4c4, and this round's docs commit.
 - Not touched: the foreign processes 9567, 10301 and 10302 (npx playwriter-project) were alive after Phase B and were not signalled. Foreign gate 2531 is not in the process table.
+
+Open items after the push of 53d4051 (numbers as given in the latest queue; the item numbers in the Round 9 and Round 10 notes above come from earlier queues):
+
+- Item 10, stale-foreign, and item 4, the cause of gate 2531's disappearance, wait on gm's kill-scope fix. The foreign mode runs a process on the gate port that is not this project's gate, and it kills gates if gm's kill scope is wrong. Gate 2531's disappearance is unexplained, and the earlier evidence (the wave of foreign gates in gm's /tmp/gm-first-open-* sandboxes) points at the same kill scope. Neither is run, and neither is a push condition, until the fix lands on origin/main.
+- Witness for both: `node test/stale.cjs foreign`, run alone, after gm's fix is on origin/main. Record its exit code, wall time and leftover count here when it runs. Until then the row is not run.
