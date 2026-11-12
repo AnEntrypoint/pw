@@ -5,15 +5,13 @@ const path = require('node:path');
 const { sleep, projectProcs, mcpSession, finishTest } = require('./support.cjs');
 
 const DEADLINE_MS = 10000;
-const IDLE_ENV = { PLAYWRITER_PAGE_IDLE_MS: '2000' };
 const OPEN = "state.page ??= await context.newPage(); return 'open'";
-const REOPEN = "const page = await context.newPage(); await page.goto('data:text/html,<title>again</title>'); return await page.title()";
+const REOPEN = "const page = await context.newPage(); await page.goto('data:text/html,<title>again</title>'); const title = await page.title(); await page.close(); return title";
 const cleanups = new Set();
 
 const gates = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('--gate')).length;
 const browsers = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('--user-data-dir=') && !row.cmd.includes('--type=')).length;
 const children = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('playwriter/bin.js')).length;
-const launchers = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('playwriter-project') && !row.cmd.includes('--gate')).length;
 
 async function waitFor(check, ms) {
   const started = Date.now();
@@ -102,22 +100,28 @@ async function sharedGateKeepsBrowserForLastLease() {
   }
 }
 
-async function reopenAfterIdle() {
+async function reopenAfterRelease() {
   const p = makeProject();
   try {
-    const s = p.session(IDLE_ENV);
+    const s = p.session();
     await s.initialize();
     assert.match(await s.exec(OPEN), /open/);
     assert.equal(browsers(p.proj), 1);
+    await sleep(8000);
+    assert.equal(gates(p.proj), 1, 'the gate stays while its lease is held');
+    assert.equal(browsers(p.proj), 1, 'the browser stays while its lease is held, with no idle close');
+    assert.equal(children(p.proj), 1);
+    s.stop();
     const took = await waitFor(() => browsers(p.proj) === 0 && gates(p.proj) === 0 && children(p.proj) === 0, 60000);
-    assert.notEqual(took, null, 'idle browser, gate and playwriter child retire while the lease is held');
-    assert.equal(launchers(p.proj), 1, 'the launcher stays with its client');
-    console.log(`ok: an idle browser retires with its gate and child in ${took} ms; the launcher stays`);
-    assert.match(await s.exec(REOPEN), /again/);
+    assert.notEqual(took, null, 'browser, gate and playwriter child retire once the lease closes');
+    console.log(`ok: browser, gate and child retire ${took} ms after the lease closes`);
+    const next = p.session();
+    await next.initialize();
+    assert.match(await next.exec(REOPEN), /again/);
     assert.equal(gates(p.proj), 1);
     assert.equal(browsers(p.proj), 1);
     assert.equal(children(p.proj), 1);
-    console.log('ok: the next call reopens the gate, browser and child');
+    console.log('ok: the next session reopens the gate, browser and child');
   } finally {
     await p.stop();
   }
@@ -126,8 +130,8 @@ async function reopenAfterIdle() {
 async function idleSessionWhileSharedCallRuns() {
   const p = makeProject();
   try {
-    const idle = p.session(IDLE_ENV);
-    const busy = p.session(IDLE_ENV);
+    const idle = p.session();
+    const busy = p.session();
     await idle.initialize();
     await busy.initialize();
     assert.match(await idle.exec(OPEN), /open/);
@@ -138,13 +142,17 @@ async function idleSessionWhileSharedCallRuns() {
     assert.equal(children(p.proj), 2, 'the idle launcher keeps its child while the browser is up');
     assert.match(await slow, /slow-done/);
     console.log('ok: an idle session keeps the shared browser while the other session is mid-call');
+    idle.stop();
+    busy.stop();
     const took = await waitFor(() => browsers(p.proj) === 0 && gates(p.proj) === 0 && children(p.proj) === 0, 60000);
-    assert.notEqual(took, null, 'after both sessions idle, the browser, gate and children retire');
-    console.log(`ok: both sessions idle; browser, gate and children retired in ${took} ms`);
-    assert.match(await idle.exec(REOPEN), /again/);
+    assert.notEqual(took, null, 'after both sessions close, the browser, gate and children retire');
+    console.log(`ok: both sessions closed; browser, gate and children retired in ${took} ms`);
+    const next = p.session();
+    await next.initialize();
+    assert.match(await next.exec(REOPEN), /again/);
     assert.equal(gates(p.proj), 1);
     assert.equal(browsers(p.proj), 1);
-    console.log('ok: the idle session reopens the shared gate and browser on its next call');
+    console.log('ok: a new session reopens the shared gate and browser on its first call');
   } finally {
     await p.stop();
   }
@@ -160,7 +168,7 @@ const hard = setTimeout(async () => {
   await noGateForListing();
   await sigkillReleasesLease();
   await sharedGateKeepsBrowserForLastLease();
-  await reopenAfterIdle();
+  await reopenAfterRelease();
   await idleSessionWhileSharedCallRuns();
   clearTimeout(hard);
   await finishTest('leases');
