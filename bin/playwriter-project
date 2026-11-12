@@ -44,6 +44,7 @@ const CHILD_EXIT_MS = 1500;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
 const INIT_ID = 'pwp-init';
 const MCP_TOOLS = require('../lib/mcp-tools.json');
+const { nodeOptions } = require('../lib/hide-windows.cjs');
 
 function findUp(start, name) {
   for (let dir = start; ; dir = path.dirname(dir)) {
@@ -89,7 +90,8 @@ const logTail = (file) => {
   }
 };
 const log = (line) => fs.appendFileSync(GATE_LOG, `${new Date().toISOString()} ${line}\n`);
-const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, windowsHide: true, ...options });
+const playwriterEnv = (env = process.env) => (process.platform === 'win32' ? { ...env, NODE_OPTIONS: nodeOptions(env.NODE_OPTIONS) } : env);
+const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, windowsHide: true, ...options, env: playwriterEnv(options.env) });
 
 function httpGet(port, urlPath, timeout = 3000) {
   return new Promise((resolve) => {
@@ -656,6 +658,11 @@ function runGate({ gate, debug }) {
     return pages.length;
   };
 
+  const pageCount = async () => {
+    const targets = await httpJson(debug, '/json/list', 3000);
+    return targets ? targets.filter((target) => target.type === 'page').length : null;
+  };
+
   const closeBlankTabs = async () => {
     const pages = ((await httpJson(debug, '/json/list', 3000)) ?? []).filter((target) => target.type === 'page');
     const blank = pages.filter((page) => page.url === 'about:blank');
@@ -681,9 +688,11 @@ function runGate({ gate, debug }) {
     const idle = Date.now() - lastActivity;
     if (chromeUp && !pagesClosed && leaseHolders.size > 0 && totalBusy() === 0 && idle >= PAGE_IDLE_MS) {
       pagesClosed = true;
-      log(`closed ${await closePages()} idle page(s); the browser stays up for the lease`);
+      log(`closed ${await closePages()} idle page(s)`);
     } else if (chromeUp && !pagesClosed) {
       await closeBlankTabs();
+    } else if (chromeUp && !browser?.adopted && leaseHolders.size > 0 && totalBusy() === 0 && (await pageCount()) === 0) {
+      await stopChrome('idle, no page left');
     }
     if (chromeUp && idle >= IDLE_MS && leaseHolders.size === 0) {
       if (browser?.adopted) {

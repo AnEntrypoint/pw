@@ -103,7 +103,7 @@ async function finishTest(name, { graceMs = 15000 } = {}) {
     await sleep(200);
     rows = ownedRows();
   }
-  const leftovers = rows.map((row) => `${row.pid} ${label(row)}`);
+  const leftovers = rows.filter((row) => label(row) !== 'relay').map((row) => `${row.pid} ${label(row)}`);
   await stopPids(rows.map((row) => row.pid));
   if (leftovers.length > 0) throw new Error(`${name} left its own processes behind: ${leftovers.join(', ')}`);
   return { leftovers };

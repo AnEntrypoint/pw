@@ -42,7 +42,9 @@ async function realChildReplies() {
     const initialize = await waitReply(1);
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
     const list = await waitReply(2);
-    return { initialize, tools: list.tools };
+    const home = path.join(os.homedir(), '.playwriter', 'relay-server.log');
+    const tools = list.tools.map((tool) => ({ ...tool, description: tool.description.split(home).join('~/.playwriter/relay-server.log') }));
+    return { initialize, tools };
   } finally {
     try {
       process.kill(-child.pid, 'SIGKILL');
@@ -51,7 +53,28 @@ async function realChildReplies() {
   }
 }
 
+function hideWindowsChecks() {
+  const { patch, nodeOptions } = require(path.join(ROOT, 'lib', 'hide-windows.cjs'));
+  const seen = [];
+  const record = (...args) => seen.push(args);
+  const fake = patch({ spawn: record, spawnSync: record, execFile: record, execFileSync: record });
+  fake.spawn('C:\\node\\node.exe', ['a.js'], { stdio: 'ignore' });
+  fake.spawn('ffmpeg', ['-version']);
+  fake.execFile('powershell', ['-Command', 'x'], () => {});
+  fake.spawn('C:\\Chrome\\chrome.exe', ['about:blank'], { detached: true });
+  assert.deepEqual(seen[0][2], { windowsHide: true, stdio: 'ignore' });
+  assert.deepEqual(seen[1][2], { windowsHide: true });
+  assert.deepEqual(seen[2][2], { windowsHide: true });
+  assert.equal(typeof seen[2][3], 'function');
+  assert.deepEqual(seen[3][2], { detached: true }, 'a browser launch keeps its window');
+  const options = nodeOptions('--max-old-space-size=512');
+  assert.match(options, /^--max-old-space-size=512 --require ".*hide-windows\.cjs"$/);
+  assert.equal(nodeOptions(options), options, 'the preload is added once');
+}
+
 (async () => {
+  hideWindowsChecks();
+  console.log('ok 0: console children get windowsHide and a browser launch does not');
   const real = await realChildReplies();
   assert.deepEqual(real.initialize, MCP_TOOLS.initialize, 'lib/mcp-tools.json initialize matches the real child');
   assert.deepEqual(real.tools, MCP_TOOLS.tools, 'lib/mcp-tools.json tools match the real child; regenerate it when the pinned playwriter changes');

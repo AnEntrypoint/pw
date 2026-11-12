@@ -22,6 +22,10 @@ The gate records the pid of each browser it starts in `.playwriter/browser.pid`.
 
 In a Linux container, add `--env PLAYWRITER_NO_SANDBOX=1` to the install command. Tabs close on an idle stop, and session cookies do not survive it.
 
+While a lease is held, the gate closes the pages after 60 seconds with no traffic (`PLAYWRITER_PAGE_IDLE_MS`) and then stops a browser that it started and that has no page left, so the launcher retires its playwriter child and the gate. The next call starts them again. This also holds for a headless browser, which does not exit when its last page closes.
+
+On Windows, the gate, the launcher's helper processes and playwriter's own console children (node, ffmpeg, powershell) start with `windowsHide`, so no console window opens. The browser window is not hidden. This is not tested on a Windows machine.
+
 Add `.playwriter/` to each project's `.gitignore`.
 
 The manual is `docs/index.html`. It covers the install options, the modes, the files, the environment, the limits and the troubleshooting messages.
