@@ -939,6 +939,15 @@ function proxyMcp(ports, direct) {
     out.then(() => new Promise((resolve) => process.stdout.write('', resolve))).then(() => process.exit(code ?? (signal ? 1 : 0)));
   };
 
+  const failCallsOn = (target) => {
+    for (const [key, entry] of pending) {
+      if (entry.method !== 'tools/call' || entry.ticket.child !== target) continue;
+      pending.delete(key);
+      callDone(entry.ticket);
+      write({ jsonrpc: '2.0', id: JSON.parse(key), error: { code: -32000, message: 'the gate for this project stopped during this call; send the call again, which starts a new executor' } });
+    }
+  };
+
   const gateLease = () => {
     if (!lease) {
       const pendingLease = acquireLease(ports.gate).catch((error) => {
@@ -948,8 +957,10 @@ function proxyMcp(ports, direct) {
       lease = pendingLease;
       pendingLease.then((socket) => {
         socket.once('close', () => {
-          if (lease === pendingLease) lease = null;
-          if (inFlight === 0) retire();
+          if (lease !== pendingLease) return;
+          lease = null;
+          failCallsOn(child);
+          retire();
         });
       }, () => {});
     }
@@ -1030,7 +1041,9 @@ function proxyMcp(ports, direct) {
         await markBusy(ticket.socket, 1);
         ticket.counted = true;
       }
-      ensureChild().stdin.write(`${line}\n`);
+      const target = ensureChild();
+      ticket.child = target;
+      target.stdin.write(`${line}\n`);
     }).catch((error) => {
       console.error(`playwriter-project: ${error.message}`);
       if (msg.id !== undefined) write({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: error.message } });
