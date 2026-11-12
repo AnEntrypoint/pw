@@ -1,7 +1,8 @@
 diff --git a/node_modules/playwriter/dist/executor.js b/node_modules/playwriter/dist/executor.js
+index 7cafd7c..c2109f8 100644
 --- a/node_modules/playwriter/dist/executor.js
 +++ b/node_modules/playwriter/dist/executor.js
-@@ -713,6 +713,23 @@
+@@ -713,6 +713,23 @@ export class PlaywrightExecutor {
      isHeadlessMode() {
          return !!this.cdpConfig.headless;
      }
@@ -25,7 +26,7 @@ diff --git a/node_modules/playwriter/dist/executor.js b/node_modules/playwriter/
      /**
       * Connect to Chrome and set up the context. Shared by ensureConnection and reset.
       * Never opens a tab: the sandbox has no default page, code creates or picks its own.
-@@ -733,8 +750,7 @@
+@@ -733,8 +750,7 @@ export class PlaywrightExecutor {
                  this.logger.log('Browser disconnected, clearing connection state');
                  this.clearConnectionState();
              });
@@ -35,7 +36,7 @@ diff --git a/node_modules/playwriter/dist/executor.js b/node_modules/playwriter/
              context.setDefaultTimeout(60000);
              context.setDefaultNavigationTimeout(10000);
              context.on('page', (page) => {
-@@ -760,8 +776,7 @@
+@@ -760,8 +776,7 @@ export class PlaywrightExecutor {
              this.logger.log('Browser disconnected, clearing connection state');
              this.clearConnectionState();
          });
@@ -46,12 +47,13 @@ diff --git a/node_modules/playwriter/dist/executor.js b/node_modules/playwriter/
          // SPA/Turbo navigations and post-click settling on real sites.
          // Navigation timeout (goto, reload) remains separate.
 diff --git a/node_modules/playwriter/src/executor.ts b/node_modules/playwriter/src/executor.ts
+index a99244c..85d7987 100644
 --- a/node_modules/playwriter/src/executor.ts
 +++ b/node_modules/playwriter/src/executor.ts
-@@ -946,6 +946,23 @@
+@@ -946,6 +946,23 @@ export class PlaywrightExecutor {
      return !!this.cdpConfig.headless
    }
-
+ 
 +  private async defaultBrowserContext(browser: Browser): Promise<BrowserContext> {
 +    if (browser.contexts().length === 0) {
 +      const session = await browser.newBrowserCDPSession()
@@ -72,7 +74,7 @@ diff --git a/node_modules/playwriter/src/executor.ts b/node_modules/playwriter/s
    /**
     * Connect to Chrome and set up the context. Shared by ensureConnection and reset.
     * Never opens a tab: the sandbox has no default page, code creates or picks its own.
-@@ -969,8 +986,7 @@
+@@ -969,8 +986,7 @@ export class PlaywrightExecutor {
          this.clearConnectionState()
        })
  
@@ -82,7 +84,7 @@ diff --git a/node_modules/playwriter/src/executor.ts b/node_modules/playwriter/s
  
        context.setDefaultTimeout(60000)
        context.setDefaultNavigationTimeout(10000)
-@@ -1006,8 +1022,7 @@
+@@ -1006,8 +1022,7 @@ export class PlaywrightExecutor {
        this.clearConnectionState()
      })
  
