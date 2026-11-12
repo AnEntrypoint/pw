@@ -458,16 +458,19 @@ function runGate({ gate, debug }) {
   const adopt = async (allowRestart) => {
     const pid = listenerPid(debug);
     const recorded = readRecordedPid();
+    const owner = liveProfileOwner();
     const built = readRaw(BROWSER_FINGERPRINT)?.trim() ?? null;
     const wanted = browserFingerprint();
-    if (allowRestart && pid !== null && pid === liveProfileOwner() && built !== wanted) {
+    if (allowRestart && pid !== null && pid === owner && built !== wanted) {
       log(`browser pid ${pid} was started as ${built ?? 'an unrecorded browser'}, not ${wanted}; stopping it to start the configured browser`);
       await stopAdopted(pid);
       return startChrome();
     }
-    const adopted = pid === null || pid !== recorded;
+    const owned = pid !== null && (pid === recorded || pid === owner);
+    if (owned && pid !== recorded) fs.writeFileSync(BROWSER_PID, `${pid}\n`);
+    const adopted = !owned;
     const warning = adopted
-      ? `browser pid ${pid ?? 'unknown'} on debug port ${debug} is not the recorded pid ${recorded ?? 'none'}; it was not stopped, and another browser may share this project`
+      ? `browser pid ${pid ?? 'unknown'} on debug port ${debug} holds neither the recorded pid ${recorded ?? 'none'} nor this project's profile; it was not stopped, and another browser may share this project`
       : null;
     browser = { pid, source: 'adopted', adopted, warning };
     log(`adopted running browser${pid ? ` pid=${pid}` : ''}`);
