@@ -1174,11 +1174,11 @@ async function main(argv) {
   const lease = await acquireLease(ports.gate);
 
   if (argv[0] === 'start') {
-    const res = await fetch(`http://${base}/json/version`, { signal: AbortSignal.timeout(60000) });
-    console.error(res.ok ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed (${res.status})`);
-    if (res.ok) await httpGet(ports.gate, `/__pwp/hold?ms=${IDLE_MS}`, 2000);
+    const ready = await waitFor(() => httpOk(ports.gate, '/json/version', 2000), 60000);
+    console.error(ready ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed (no answer on port ${ports.gate} within 60 s)`);
+    if (ready) await httpGet(ports.gate, `/__pwp/hold?ms=${IDLE_MS}`, 2000);
     lease.destroy();
-    process.exit(res.ok ? 0 : 1);
+    process.exit(ready ? 0 : 1);
   }
 
   const newSession = argv[0] === 'session' && (argv.length === 1 || argv[1].startsWith('-'));
