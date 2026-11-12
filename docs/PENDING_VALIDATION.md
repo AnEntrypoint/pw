@@ -172,4 +172,16 @@ Lifecycle probe reasons (cfbadf1): the open cause, the failed debug-port probe, 
 
 - Change: test/lifecycle.cjs has one probe helper, probeOnce, for the debug port and the gate ping. It resolves ok or not ok, and it records the reason in a per-probe count and a last reason: "ok", "timeout after 3000 ms on port N", "connection error CODE on port N" (the error code from Node, or its message when there is none), or "HTTP STATUS". The per-probe report prints on success as "probes:" and on failure as "probes:", followed by "gate status:". The gate status is read before finishTest stops the gate, because finishTest stops it.
 - Why: the failed probe's reason was discarded, because the old httpOk returned a bare boolean, so the open cause cannot be recovered from the 19:25:34Z run. Any future probe failure now names its reason in the failure output.
-- Phase B for this change is recorded below, with the probe reasons from the loaded runs.
+- Phase B on cfbadf1 (52ce466 is docs only; main was pushed at 52ce466):
+  - Load: a 12-thread busy-loop generator (one worker per core), started by its own PID under timeout 1500, stopped by SIGTERM to that PID (exit 143, gone afterwards). Five runs of lifecycle alone under it, each through the runner under a 400 s timeout on the runner PID. All five: exit 0, leftover 0, "lifecycle: 12 checks passed".
+    - Run 1 (logdir /tmp/tmp.Pkr1pfNGvk), wall 47122 ms. Probes: gate ping ok x26, ECONNREFUSED x3, ECONNRESET x1; debug-port ok x3, ECONNREFUSED x5.
+    - Run 2 (/tmp/tmp.IS96C3odRs), wall 48021 ms. Gate ping ok x29, ECONNREFUSED x4; debug-port ok x3, ECONNREFUSED x5.
+    - Run 3 (/tmp/tmp.yRVUI6jsT1), wall 47002 ms. Gate ping ok x23, ECONNREFUSED x4; debug-port ok x3, ECONNREFUSED x5.
+    - Run 4 (/tmp/tmp.hCxRwltPPP), wall 49230 ms. Gate ping ok x33, ECONNREFUSED x4; debug-port ok x3, ECONNREFUSED x5.
+    - Run 5 (/tmp/tmp.HoohcZFPU2), wall 48756 ms. Gate ping ok x33, ECONNREFUSED x4; debug-port ok x3, ECONNREFUSED x5.
+  - No probe timed out and no probe returned a non-200 in the five runs. The ECONNREFUSED results are the negative checks while the browser is down, and the ECONNRESET in run 1 is a gate ping. The original condition (one debug-port probe failing its 3 s budget during the held-lease window) did not reproduce.
+  - Rerun of lifecycle alone on 52ce466 (logdir /tmp/tmp.eyv8BtxLT6): exit 0, wall 41620 ms, leftover 0, "lifecycle: 12 checks passed", the same probe pattern: debug-port ok x3, ECONNREFUSED x5.
+  - Full set once on 52ce466 (logdir /tmp/tmp.WBrXOyDprY; worst exit 0; leftover 0 on every row): npm test 195429 ms, f1 8066 ms, orphan 26856 ms, mode 5165 ms, memory 96485 ms, phase-b 17757 ms, start-refusal 6211 ms, signal 1714 ms, stale-replace 5791 ms, stale-held 6981 ms, stale-unanswering 18556 ms, stale-nosandbox 27754 ms, lifecycle-nosandbox 41371 ms. Not run: stale-foreign (item 10), which waits on gm's kill-scope fix.
+  - Longest step of this round: the full-set npm test, 195429 ms.
+  - Push: 8df9d81..52ce466 main -> main, exit 0; status "## main...origin/main".
+  - The open cause, the one failed probe in the 19:25:34Z run, remains unrecorded: the probe-reason output is now in place, and none of the loaded runs produced a failing probe to record.
