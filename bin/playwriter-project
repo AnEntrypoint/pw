@@ -262,6 +262,21 @@ function pidAlive(pid) {
   return state !== 'Z' && state !== 'X';
 }
 
+function commandOf(pid) {
+  if (process.platform === 'linux') return readRaw(`/proc/${pid}/cmdline`)?.replaceAll('\0', ' ') ?? '';
+  try {
+    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return '';
+  }
+}
+
+function isOwnGate(pid, port) {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  const command = commandOf(pid);
+  return command.includes(__filename) && command.split(/\s+/).includes('--gate') && listenerPid(port) === pid;
+}
+
 function readRaw(file) {
   try {
     return fs.readFileSync(file, 'utf8');
@@ -506,15 +521,6 @@ function runGate({ gate, debug }) {
       ws.onerror = resolve;
       setTimeout(resolve, 5000).unref();
     });
-  };
-
-  const commandOf = (pid) => {
-    if (process.platform === 'linux') return readRaw(`/proc/${pid}/cmdline`)?.replaceAll('\0', ' ') ?? '';
-    try {
-      return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch {
-      return '';
-    }
   };
 
   const ownedBrowserPids = () => [...new Set([
@@ -1149,10 +1155,16 @@ async function replaceStaleGate(ports) {
   const status = await httpJson(ports.gate, '/__pwp/status?pages=0', 1000);
   if (!status) return null;
   if (status.leases > 0) return `the browser was started as ${built}, not ${wanted}; it is not restarted while ${status.leases} other lease(s) hold this project's gate`;
+  const pid = status.gate?.pid;
+  if (!isOwnGate(pid, ports.gate)) throw new Error(`the process answering on port ${ports.gate} is not this project's gate (pid ${pid}); it was not signalled and no lease was taken on it`);
   try {
-    process.kill(status.gate.pid, 'SIGTERM');
-  } catch {}
-  await waitFor(async () => !(await httpOk(ports.gate, '/__pwp/ping', 500)), 15000);
+    process.kill(pid, 'SIGTERM');
+  } catch (error) {
+    if (error.code !== 'ESRCH') console.error(`playwriter-project: could not signal gate ${pid}: ${error.message}`);
+  }
+  if (!(await waitFor(async () => !(await httpOk(ports.gate, '/__pwp/ping', 500)), 15000))) {
+    throw new Error(`gate ${pid} still answers on port ${ports.gate} 15 s after SIGTERM; no lease was taken on it`);
+  }
   return null;
 }
 
