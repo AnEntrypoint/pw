@@ -27,7 +27,7 @@ Sessions on this pin run in direct mode (the launcher always sets PLAYWRITER_DIR
 
 ## Final pin for this round
 
-Pin: 243db69 (launcher with busy-tracked leases, idle child and gate retirement, trimmed renderers). Use github:AnEntrypoint/pw#243db69 or the direct checkout at 243db69.
+Pin: 43b53dc (243db69 plus: an idle gate-started browser with no page left is stopped, which a headless browser needs; console children are hidden on Windows; the tool list names the relay log as ~/.playwriter/relay-server.log). Use github:AnEntrypoint/pw#43b53dc or the direct checkout at 43b53dc. gm pins 43b53dc.
 
 ## What changes for consumers
 
