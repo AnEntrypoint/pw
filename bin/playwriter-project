@@ -425,6 +425,7 @@ function runGate({ gate, debug }) {
     const refused = () => fs.readFileSync(BROWSER_LOG).subarray(from).includes('No usable sandbox');
     await waitFor(async () => (await probe()) || refused() || exited !== null, 30000);
     if (await probe()) {
+      await waitFor(async () => ((await httpJson(debug, '/json/list', 3000)) ?? []).some((target) => target.type === 'page'), 30000);
       const pid = listenerPid(debug) ?? (pidAlive(chromeProc.pid) ? chromeProc.pid : null);
       if (pid === null) throw new Error(`browser answered on port ${debug} but its pid could not be read; see ${BROWSER_LOG}`);
       const owner = liveProfileOwner();
