@@ -331,3 +331,54 @@ Full set once on 8830f05 (code f54098c, record 8830f05), job `pb-fullset-p1`, lo
 - After the full set: no pw-test-, pw-stale- or foreign-server process left; none of the load PIDs; gm's gate pid 1180507 alive and untouched; nothing listens on port 2531.
 - Item 4: no `2531` as a whole word in /tmp/tmp.XLBIJXO5Ge or /tmp/tmp.7n3UYOTzaY. It stays open, as recorded in b0a0d57.
 - Longest step: the full-set runner, 548356 ms (9 min 8 s). Its longest row was npm-test, 207090 ms.
+
+## Gate probe policy: GONE_AFTER_PROBES stays 3, decided from the logs
+
+Decision: keep `GONE_AFTER_PROBES = 3`. It is not raised. The logs show no streak of two or more failed probes that recovered, so nothing shows that three is too strict, and the smallest raise the data supports is none.
+
+Evidence, from the gate logs named (times UTC, each line quoted from its file):
+- Streaks of two misses followed by a third, which marked the browser gone: 7 in all. Six are from gm's fix-test gates on 2026-11-09 between 00:59 and 01:06 (`/tmp/gmfix-projA-XVq0Zd`, `gmfix-projB-I0BbtT`, `gmfix-other-B92dKz`, `gmfix-projA2-w2gEti`, `gmfix-profile-alpha-CFGsfx`, `gmfix-profile-bravo-p84Cox`). The seventh is gm's live gate, `/workspace/gm/.playwriter/gate.log`: `probe failed 1/3` at 2026-11-10T08:14:23.493Z, `2/3` at 08:14:28.480Z, `browser went away after 3 failed probes` at 08:14:33.493Z. In all seven, the gate logged no browser start, adoption or recovery after the "went away" line. In gm's gate the next browser start, at 2026-11-11T22:05:48Z, was a spawn, not an adoption. Adoption probes the debug port first (`ensureChrome`), so the port was not answering then. No log here records why those browsers stopped answering.
+- One single miss followed by answers: `/workspace/pw/.playwriter/gate.log`, `probe failed 1/3` at 2026-11-06T13:59:28Z. The next line is the gate's exit at 15:08:44Z (`browser stopped`, `no leases`). Each failed tick logs a line, and there was no "stopped answering" or "went away" line in between, so the ticks in those 70 minutes answered. One miss is below the threshold.
+- Five single misses on a request, under the previous call-path rule: `browser stopped answering; starting it again` at 2026-11-12T16:32:42.531Z, 16:34:28.024Z, 16:36:34.184Z, 16:38:16.428Z and 20:53:47.481Z (the pwfo, pwfo-race, pwfo-ctx-vfoC and tmp.wyO9Mm9ttM logs). Each was followed 0.4 to 0.5 s later by `browser started pid=…`, a spawn, and none has a `start deferred` line. A spawn means no live process held the profile lock, so the browser before each restart was dead. Three of the five came 0.7 to 1.1 s after a tick's `probe failed 1/3`, so those were two misses and then a dead browser.
+- Witness-side probes in the ten loaded runs (`/tmp/tmp.XLBIJXO5Ge`) and in `lifecycle-nosandbox.log` of the full set on 8830f05 (`/tmp/tmp.7n3UYOTzaY`) show no probe timeout and no HTTP error. Their only failures are ECONNREFUSED where the witness expects the port to be down. The gate's own logs for those runs are not kept, because a passing `lifecycle.cjs` deletes its project directory, so these rows are witness-side evidence only.
+
+Tally: 7 streaks of two or more misses, none recovered. 1 single miss followed by answers. 5 single misses on a request, each followed by a dead browser.
+
+## Call-path miss: one rule for the tick and for requests (fc2d19a, witness 3d4142e)
+
+- Before: a request through the gate probed once. A failed probe logged `browser stopped answering; starting it again`, dropped every socket the gate held, and restarted the browser. The tick needed three misses for the same outcome, so the two paths disagreed.
+- Change, `bin/playwriter-project`: a request's miss counts into the same `missedProbes` as a tick miss. The request retries the probe after `PROBE_RETRY_MS` (1000 ms) and marks the browser gone at the third consecutive miss (drops sockets, logs `browser went away after 3 failed probes`). Concurrent requests share one check. The tick keeps one probe per tick.
+- Cost: a request to a browser that is really gone waits about 2 s more before the restart (two 1 s retries; a refused port fails at once). If the port hangs, each probe takes its 3 s timeout, so the worst case is about 11 s before the restart, against 3 s before.
+- Witness `test/callprobe.cjs` (`npm run callprobe`, added to `npm test`): starts the browser through a tool call, holds a lease (an open `/__pwp/lease` response), SIGSTOPs the browser's listening process for 3.5 s (a process the test's own gate started; resumed in a `finally`), and sends `GET /json/version` through the gate during the stop. It asserts no `stopped answering`, no `browser started` and no `went away` after the stop; one `probe failed 1/3`; a 200 answer with `webSocketDebuggerUrl`; and the same listener pid afterwards.
+- Why a request and not a tool call: a second `exec` reused the executor's open connection and sent nothing to the gate, so no probe ran. The first witness version used `exec` and failed at its logging assertion for that reason (kept `/tmp/pw-callprobe-ds3bWY`).
+
+## Phase B on fc2d19a (launcher) and 3d4142e (witness): green
+
+- `node test/callprobe.cjs` on the fixed launcher: exit 0, wall 14356 ms (logdir /tmp/tmp.OEElWY4IN7). Output: `ok: one missed probe during a request is logged as one miss; the browser is not restarted and the request is answered`, then `callprobe: all checks passed`.
+- Red on the previous launcher (`git show HEAD~1:bin/playwriter-project` put in place, the witness run, then `git checkout -- bin/playwriter-project`; the tree was clean afterwards): exit 1, wall 12191 ms, `callprobe: FAILED: one missed probe during a request does not restart the browser`. Kept `/tmp/pw-callprobe-9a9NdW`. Its gate.log: `23:34:02.539Z browser stopped answering; starting it again`, then `23:34:03.049Z adopted running browser pid=1608149` (the same browser), then the gate exit at `23:34:08.301Z`.
+- Full set once on 3d4142e (logdir /tmp/tmp.VSD8tgnslA, gm job pb-fullset-p2, `timeout 3300`): runner exit 0, runner worst exit 0, wall 569716 ms (9 min 30 s), leftover 0 on every row. Rows (exit, wall ms): npm-test 210593 (the chain now ends with callprobe); f1 7947; orphan 26766; mode 5044; memory 96366; phase-b 17833; start-refusal 6313; signal 1702; stale-replace 6240; stale-held 7050; stale-unanswering 18556; stale-nosandbox 27644; lifecycle-nosandbox 41615; lifecycle-forced-check11 36473; lifecycle-forced-cleanup 41557; stale-foreign 3355; callprobe 14210. All exit 0.
+- The forced witnesses keep their directories by design: `/tmp/pw-test-Gonamr` (check11) and `/tmp/pw-test-yrHRCi` (cleanup).
+- After the run: no process of these runs is left (no pw-test-, pw-stale-, pw-callprobe- or foreign-server process). gm's gate pid 1180507 is alive and untouched, and nothing listens on port 2531.
+- Kept from this turn, nothing deleted: `/tmp/pw-callprobe-9a9NdW` (the red), `/tmp/pw-callprobe-TQFFQs` (the first red, from the first witness version) and `/tmp/pw-callprobe-ds3bWY` (the first green attempt).
+
+## Item 4: open, with what is ruled out
+
+Status: open. The cause of gate 2531's disappearance is not established.
+
+- Ruled out: no kill event for pid 2531 in pw's logs or gm's logs. gm's search of 17:53:01Z to 17:57Z found none; this is the result reported for this turn, and gm's search was not re-run here. The new logs of this turn (`/tmp/tmp.XLBIJXO5Ge`, `/tmp/tmp.7n3UYOTzaY`) contain no `2531` as a whole word.
+- The pre-fix kill paths that could reach a foreign gate, at gm's be9909f (read with `gh api`; no gm code was run):
+  - `lazy_browser.cpp`: fixed. A kill needs the pid's start time to match, and fresh pids are counted against a snapshot.
+  - `browser_first_open.cpp`: fixed. The gate pid is checked by start time before the kill, and sandbox-path matches are checked when scanned.
+  - `browser_scope.cpp`: not fixed. Its kill at lines 257 to 263 (the process trees of `processes_mentioning(home)`, then `kill_processes(tree)` at line 263) is unchanged; the commit changes only the message on line 247.
+  So the pre-fix paths are fixed in be9909f for two of the three files, not all three.
+- gm's gate pid 1180507 is alive and untouched, and nothing listens on port 2531.
+- Clarification: line 96 of this file calls "item 1, the lifecycle failure" settled by gm's check. That is the gate-gone wave of an earlier run, not the 19:25:34Z probe failure. Item 1 stays open.
+- What would settle it: a kill record naming pid 2531, or a log line naming it with a time between 17:53:01Z and its absence. None is in the logs read.
+
+## Remaining pw work, ranked
+
+1. Done in this turn: a missed probe on a request restarting the browser (fc2d19a, witness 3d4142e). Green.
+2. Item 1, the 19:25:34Z probe: no work until it fails again. The probe reasons and `failure.txt` are in place, and the probe was not reproduced in ten loaded runs.
+3. Item 4: the remaining kill path (`browser_scope.cpp`) is in gm's repo, not pw's.
+
+Blocked on the owner, not ranked: item 3, the sandboxed launch (needs the owner's host sandbox setting); the `--no-sandbox` fallback (stays off; item 2, the owner decides); F1 and the upstream send (`docs/UPSTREAM_PLAYWRITER.md` needs the owner's repro, and nothing is sent); deleting `/tmp/pw-test-*` (item 7, needs proof of ownership). Not recoverable: the reason for the revert 001cf63 (item 5) is in no record.
