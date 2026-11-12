@@ -56,3 +56,15 @@ Round 6 (gate exit paths, witnesses assert the invariant):
 - test/orphan.cjs (W1): after the gate exits, the witness asserts no gate process remains and no browser answers /json/version on the gate's debug port, in both pid-file scenarios.
 - test/leases.cjs (W2): every gate-exit wait (SIGKILLed launcher, both launchers killed, last lease released, idle session with a shared call) for the two 10 s checks (a SIGKILLed launcher, and both launchers killed), also requires that no browser answers on the debug port, with the original gate and browser counts and deadline; the 60 s retirement checks also require that no executor child remains.
 - Cause: the failed npm test run left a Chromium with its gate gone and its project directory deleted; it answered /json/version, so the gate had exited without stopping the browser it started (see Phase B on 0c807f9 above).
+
+Phase B on fb927aa (the gate exit fix in 283206 and the test fix in fb927aa; npm ci first; logs in a mktemp -d directory, /tmp/tmp.O9V7qEdEm6):
+
+- npm ci: exit 0, wall 3320 ms.
+- npm test: exit 0, wall 112917 ms. tools, lifecycle and leases all pass.
+- lifecycle then leases, run 1: exit 0, wall 107589 ms; run 2: exit 0, wall 107468 ms; run 3: exit 0, wall 108487 ms. The failing order passes three times in a row.
+- npm run f1: exit 0, wall 7910 ms. firstPageSurvivedGateKill: true.
+- npm run orphan: exit 0, wall 26138 ms. Both pid-file scenarios: after exit 0, gates after exit 0, browser answers /json/version after exit false, restarted gate owns browser true.
+- npm run mode: exit 0, wall 4931 ms. extensionsConnected 0, relays 0, childrenWithDirectUrl 1 of 1.
+- node test/memory.cjs: exit 0, wall 96302 ms. drainMs 11 (never-uses-browser) and 5617 (uses-browser).
+
+Before the test fix, on 283206: npm test exit 1, wall 62150 ms, leases: gate and browser stop within 10 s of a SIGKILLed launcher, and nothing answers on the debug port; lifecycle then leases exit 1, wall 78964 ms, leases: gate and browser stop within 10 s once both launchers are dead, and nothing answers on the debug port. The cause was the executor child: the 10 s checks counted it, and it lives about 5 s past the gate exit (the gate and browser were gone at 5.2 s, the child at 10.3 s). The 10 s checks counted only the gate and browser before the port check was added, so fb927aa restores those counts and keeps the port check. The 60 s retirement checks still count the executor child.
