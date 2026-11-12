@@ -28,6 +28,27 @@ const httpOk = (port, urlPath) => new Promise((resolve) => {
 const readPort = (name) => Number(fs.readFileSync(path.join(STATE, name), 'utf8'));
 const chromeUp = () => httpOk(readPort('debug-port'), '/json/version');
 const gateUp = () => httpOk(readPort('port'), '/__pwp/ping');
+const gateStatus = () => new Promise((resolve) => {
+  const req = http.get({ host: '127.0.0.1', port: readPort('port'), path: '/__pwp/status?pages=0', timeout: 3000 }, (res) => {
+    let body = '';
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => {
+      body += chunk;
+    });
+    res.on('end', () => {
+      try {
+        resolve(res.statusCode === 200 ? JSON.parse(body) : null);
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+  req.on('error', () => resolve(null));
+  req.on('timeout', () => {
+    req.destroy();
+    resolve(null);
+  });
+});
 const textOf = (msg) => (msg.result?.content ?? []).map((c) => c.text).join('') || JSON.stringify(msg);
 const until = async (check, ms = 8000) => {
   const end = Date.now() + ms;
@@ -96,16 +117,27 @@ const check = (label) => {
   const set = await m.exec(3, "state.page ??= await context.newPage(); await state.page.goto('data:text/html,<title>keep</title>'); await context.addCookies([{ name: 'keep', value: 'yes', url: 'http://example.test/', expires: Math.floor(Date.now() / 1000) + 86400 }]); return 'set'");
   assert.match(set, /set/);
   assert.equal(await until(chromeUp), true);
+  let startedPid = null;
+  assert.equal(await until(async () => {
+    startedPid = (await gateStatus())?.browser?.pid ?? null;
+    return startedPid !== null;
+  }, 10000), true, 'the gate reports the browser it started');
   check('first tool call opens the browser');
 
   await sleep(IDLE_MS + 4000);
-  assert.equal(await chromeUp(), true);
+  let held = null;
+  const heldByGate = await until(async () => {
+    held = await gateStatus();
+    return held?.leases >= 1 && held.browser?.pid === startedPid;
+  }, 10000);
+  assert.equal(heldByGate, true, `the gate still holds the MCP lease and the browser it started: ${JSON.stringify(held)}`);
+  assert.equal(await until(chromeUp, 10000), true, 'the debug port answers');
   assert.equal(fs.existsSync(path.join(STATE, 'browser-profile')), true);
   check('a held MCP lease keeps the browser open past the idle time');
 
   const reuse = await m.exec(4, "return (await context.cookies('http://example.test/')).map((c) => c.name + '=' + c.value)");
   assert.match(reuse, /keep=yes/);
-  assert.equal(await chromeUp(), true);
+  assert.equal(await until(chromeUp, 10000), true, 'the debug port answers after the reuse');
   check('same MCP session still has the cookie');
 
   const listed = JSON.parse((await m.call(5, 'tools/call', { name: 'browsers', arguments: { action: 'list' } })).result.content[0].text);
