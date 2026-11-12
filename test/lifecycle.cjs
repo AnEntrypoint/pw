@@ -14,20 +14,36 @@ const IDLE_MS = 4000;
 const ENV = { ...process.env, PLAYWRITER_PROJECT_DIR: PROJ, PLAYWRITER_IDLE_MS: String(IDLE_MS), PLAYWRITER_TELEMETRY: '0' };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const httpOk = (port, urlPath) => new Promise((resolve) => {
-  const req = http.get({ host: '127.0.0.1', port, path: urlPath, timeout: 3000 }, (res) => {
+const PROBE_TIMEOUT_MS = 3000;
+const probes = new Map();
+const recordProbe = (name, reason) => {
+  const seen = probes.get(name) ?? { last: '', counts: new Map() };
+  seen.last = reason;
+  seen.counts.set(reason, (seen.counts.get(reason) ?? 0) + 1);
+  probes.set(name, seen);
+};
+const probeReport = () => [...probes].map(([name, seen]) => `  ${name}: last "${seen.last}"; ${[...seen.counts].map(([reason, n]) => `${reason} x${n}`).join(', ')}`).join('\n');
+const probeOnce = (name, port, urlPath) => new Promise((resolve) => {
+  let settled = false;
+  const finish = (ok, reason) => {
+    if (settled) return;
+    settled = true;
+    recordProbe(name, reason);
+    resolve(ok);
+  };
+  const req = http.get({ host: '127.0.0.1', port, path: urlPath, timeout: PROBE_TIMEOUT_MS }, (res) => {
     res.resume();
-    resolve(res.statusCode === 200);
+    finish(res.statusCode === 200, res.statusCode === 200 ? 'ok' : `HTTP ${res.statusCode}`);
   });
-  req.on('error', () => resolve(false));
+  req.on('error', (error) => finish(false, `connection error ${error.code ?? error.message} on port ${port}`));
   req.on('timeout', () => {
+    finish(false, `timeout after ${PROBE_TIMEOUT_MS} ms on port ${port}`);
     req.destroy();
-    resolve(false);
   });
 });
 const readPort = (name) => Number(fs.readFileSync(path.join(STATE, name), 'utf8'));
-const chromeUp = () => httpOk(readPort('debug-port'), '/json/version');
-const gateUp = () => httpOk(readPort('port'), '/__pwp/ping');
+const chromeUp = () => probeOnce('debug-port /json/version', readPort('debug-port'), '/json/version');
+const gateUp = () => probeOnce('gate /__pwp/ping', readPort('port'), '/__pwp/ping');
 const gateStatus = () => new Promise((resolve) => {
   const req = http.get({ host: '127.0.0.1', port: readPort('port'), path: '/__pwp/status?pages=0', timeout: 3000 }, (res) => {
     let body = '';
@@ -180,6 +196,7 @@ const check = (label) => {
 
   spawnSync(process.execPath, [path.join(ROOT, 'node_modules', 'playwriter', 'bin.js'), 'session', 'delete', sid], { env: ENV, encoding: 'utf8' });
   console.log(`lifecycle: ${checks} checks passed`);
+  console.log(`probes:\n${probeReport()}`);
 })()
   .then(async () => {
     await finishTest('lifecycle');
@@ -187,8 +204,11 @@ const check = (label) => {
     process.exit(0);
   })
   .catch(async (error) => {
+    const status = await gateStatus().catch(() => null);
     await finishTest('lifecycle').catch(() => {});
     console.error(`lifecycle: FAILED: ${error.message}`);
+    console.error(`probes:\n${probeReport()}`);
+    console.error(`gate status: ${JSON.stringify(status)}`);
     console.error(`project kept for inspection: ${PROJ}`);
     process.exit(1);
   });
