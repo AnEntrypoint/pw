@@ -106,12 +106,12 @@ function httpGet(port, urlPath, timeout = 3000) {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
-      res.on('error', () => resolve(null));
+      res.on('error', (error) => resolve({ error: `response error ${error.code ?? error.message}` }));
     });
-    req.on('error', () => resolve(null));
+    req.on('error', (error) => resolve({ error: `connection error ${error.code ?? error.message}` }));
     req.on('timeout', () => {
       req.destroy();
-      resolve(null);
+      resolve({ error: `timeout after ${timeout} ms` });
     });
   });
 }
@@ -374,6 +374,10 @@ function runGate({ gate, debug }) {
     lastActivity = Date.now();
   };
   const probe = () => httpOk(debug, '/json/version');
+  const probeReason = async () => {
+    const res = await httpGet(debug, '/json/version');
+    return res?.status === 200 ? null : (res?.error ?? `HTTP ${res?.status}`);
+  };
   const gone = async () => !(await probe());
   const dropSockets = () => {
     for (const socket of sockets) socket.destroy();
@@ -751,16 +755,17 @@ function runGate({ gate, debug }) {
 
   const tick = async () => {
     if (chromeUp) {
-      if (await probe()) {
+      const reason = await probeReason();
+      if (reason === null) {
         missedProbes = 0;
       } else if (++missedProbes >= GONE_AFTER_PROBES) {
         chromeUp = false;
         browser = null;
         missedProbes = 0;
         dropSockets();
-        log(`browser went away after ${GONE_AFTER_PROBES} failed probes`);
+        log(`browser went away after ${GONE_AFTER_PROBES} failed probes; last: ${reason}`);
       } else {
-        log(`probe failed ${missedProbes}/${GONE_AFTER_PROBES}`);
+        log(`probe failed ${missedProbes}/${GONE_AFTER_PROBES}: ${reason}`);
       }
     }
     const idle = Date.now() - lastActivity;

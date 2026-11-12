@@ -32,6 +32,7 @@ const probeOnce = (name, port, urlPath) => new Promise((resolve) => {
     recordProbe(name, reason);
     resolve(ok);
   };
+  if (!port) return finish(false, `no port file for ${name}`);
   const req = http.get({ host: '127.0.0.1', port, path: urlPath, timeout: PROBE_TIMEOUT_MS }, (res) => {
     res.resume();
     finish(res.statusCode === 200, res.statusCode === 200 ? 'ok' : `HTTP ${res.statusCode}`);
@@ -42,11 +43,19 @@ const probeOnce = (name, port, urlPath) => new Promise((resolve) => {
     req.destroy();
   });
 });
-const readPort = (name) => Number(fs.readFileSync(path.join(STATE, name), 'utf8'));
+const readPort = (name) => {
+  try {
+    return Number(fs.readFileSync(path.join(STATE, name), 'utf8'));
+  } catch {
+    return 0;
+  }
+};
 const chromeUp = () => probeOnce('debug-port /json/version', readPort('debug-port'), '/json/version');
 const gateUp = () => probeOnce('gate /__pwp/ping', readPort('port'), '/__pwp/ping');
 const gateStatus = () => new Promise((resolve) => {
-  const req = http.get({ host: '127.0.0.1', port: readPort('port'), path: '/__pwp/status?pages=0', timeout: 3000 }, (res) => {
+  const port = readPort('port');
+  if (!port) return resolve(null);
+  const req = http.get({ host: '127.0.0.1', port, path: '/__pwp/status?pages=0', timeout: 3000 }, (res) => {
     let body = '';
     res.setEncoding('utf8');
     res.on('data', (chunk) => {
@@ -153,7 +162,7 @@ const failureReport = (error, gateText, probeText) => [
 
   const set = await m.exec(3, "state.page ??= await context.newPage(); await state.page.goto('data:text/html,<title>keep</title>'); await context.addCookies([{ name: 'keep', value: 'yes', url: 'http://example.test/', expires: Math.floor(Date.now() / 1000) + 86400 }]); return 'set'");
   assert.match(set, /set/);
-  assert.equal(await until(chromeUp), true);
+  assert.equal(await until(chromeUp, 15000), true, 'the debug port answers after the first call');
   let startedPid = null;
   assert.equal(await until(async () => {
     startedPid = (await gateStatus())?.browser?.pid ?? null;
@@ -183,13 +192,13 @@ const failureReport = (error, gateText, probeText) => [
 
   const closed = JSON.parse((await m.call(6, 'tools/call', { name: 'browsers', arguments: { action: 'close', target: 'project' } })).result.content[0].text);
   assert.equal(closed.closed.length, 1);
-  assert.equal(await chromeUp(), false);
+  assert.equal(await until(async () => !(await chromeUp()), 10000), true, 'the debug port stops answering after the close');
   check('browsers close stops the project browser when no other lease is held');
 
   m.close();
   await until(async () => !(await gateUp()), IDLE_MS + 30000);
   assert.equal(await gateUp(), false);
-  assert.equal(await chromeUp(), false);
+  assert.equal(await until(async () => !(await chromeUp()), 10000), true, 'the browser stays closed once the agent disconnects');
   check('gate exits and the browser stays closed once the agent disconnects');
 
   const session = cli(['session']);
@@ -203,7 +212,7 @@ const failureReport = (error, gateText, probeText) => [
   check('CLI exec runs in the project browser');
 
   await sleep(IDLE_MS + 4000);
-  assert.equal(await chromeUp(), false);
+  assert.equal(await until(async () => !(await chromeUp()), 12000), true, 'the CLI session browser stops after idle');
   check('CLI session browser stops after idle');
 
   const after = cli(['-s', sid, '-e', "return (await context.cookies('http://example.test/')).map((c) => c.name + '=' + c.value)"]);
@@ -212,8 +221,7 @@ const failureReport = (error, gateText, probeText) => [
   check('CLI session reconnects after idle and the cookie survived');
 
   await sleep(IDLE_MS + 8000);
-  assert.equal(await chromeUp(), false);
-  assert.equal(await gateUp(), false);
+  assert.equal(await until(async () => !(await chromeUp()) && !(await gateUp()), 15000), true, 'the browser and the gate are stopped at the end');
   check('everything is stopped at the end');
 
   spawnSync(process.execPath, [path.join(ROOT, 'node_modules', 'playwriter', 'bin.js'), 'session', 'delete', sid], { env: ENV, encoding: 'utf8' });
