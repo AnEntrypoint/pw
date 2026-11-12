@@ -4,8 +4,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const POINTS = {
-  check11: { message: 'forced failure at check 11', marker: "FORCE === 'check11'" },
-  cleanup: { message: 'forced failure in cleanup', marker: "FORCE === 'cleanup'" },
+  check11: { message: 'forced failure at check 11', marker: "FORCE === 'check11'", gate: /gate status: \{"project":/ },
+  cleanup: { message: 'forced failure in cleanup', marker: "FORCE === 'cleanup'", gate: /gate status: not answering: / },
 };
 const point = process.argv[2];
 assert.ok(point in POINTS, `use one of ${Object.keys(POINTS).join(', ')}`);
@@ -28,6 +28,6 @@ const text = fs.readFileSync(path.join(kept, 'failure.txt'), 'utf8');
 assert.match(text, new RegExp(`failure: ${POINTS[point].message}`), 'failure.txt names the message');
 assert.match(text, new RegExp(`line: ${expectedLine}\n`), `failure.txt names line ${expectedLine}`);
 assert.match(text, /stack:\n[\s\S]*lifecycle\.cjs:\d+/, 'failure.txt holds the stack');
-assert.match(text, /gate status: \{"project":/, 'failure.txt holds the gate status');
+assert.match(text, POINTS[point].gate, 'failure.txt holds the gate status');
 assert.match(text, /browser\.log, last 20 lines:/, 'failure.txt holds the browser log tail');
 console.log(`ok: forced ${point} fails with the message, line ${expectedLine}, the stack, the gate status and the browser log tail; kept ${kept}`);

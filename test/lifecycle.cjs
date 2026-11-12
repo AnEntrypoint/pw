@@ -66,6 +66,7 @@ const gateStatus = () => new Promise((resolve) => {
     resolve(null);
   });
 });
+const gateNote = async () => ((await gateUp()) ? 'answers /__pwp/ping, status unavailable' : `not answering: ${probes.get('gate /__pwp/ping').last}`);
 const textOf = (msg) => (msg.result?.content ?? []).map((c) => c.text).join('') || JSON.stringify(msg);
 const until = async (check, ms = 8000) => {
   const end = Date.now() + ms;
@@ -128,13 +129,13 @@ const tail = (file, lines = 20) => {
   }
 };
 const failureLine = (error) => /lifecycle\.cjs:(\d+)/.exec(error.stack ?? '')?.[1] ?? 'unknown';
-const failureReport = (error, status, probeText) => [
+const failureReport = (error, gateText, probeText) => [
   `failure: ${error.message}`,
   `line: ${failureLine(error)}`,
   `checks passed before the failure: ${checks}`,
   `stack:\n${error.stack}`,
   `probes:\n${probeText}`,
-  `gate status: ${JSON.stringify(status)}`,
+  `gate status: ${gateText}`,
   `gate.log, last 20 lines:\n${tail(path.join(STATE, 'gate.log'))}`,
   `browser.log, last 20 lines:\n${tail(path.join(STATE, 'browser.log'))}`,
 ].join('\n\n') + '\n';
@@ -226,10 +227,11 @@ const failureReport = (error, status, probeText) => [
     process.exit(0);
   })
   .catch(async (error) => {
-    const status = await gateStatus().catch(() => null);
+    const status = await gateStatus();
+    const gateText = status ? JSON.stringify(status) : await gateNote();
     const probeText = probeReport();
     await finishTest('lifecycle').catch(() => {});
-    const report = failureReport(error, status, probeText);
+    const report = failureReport(error, gateText, probeText);
     const file = path.join(PROJ, 'failure.txt');
     try {
       fs.writeFileSync(file, report);
