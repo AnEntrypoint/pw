@@ -7,13 +7,16 @@
     "playwriter-project": "bin/playwriter-project"
   },
   "scripts": {
-    "test": "node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs",
-    "witness": "node test/memory.cjs"
+    "postinstall": "patch-package --error-on-fail",
+    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs",
+    "witness": "node test/memory.cjs",
+    "f1": "node test/firstpage.cjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
+    "patch-package": "8.0.1",
     "playwriter": "0.9.0"
   }
 }
