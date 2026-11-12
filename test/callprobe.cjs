@@ -12,17 +12,24 @@ const STOP_MS = 3500;
 
 const readPort = (name) => Number(fs.readFileSync(path.join(STATE, name), 'utf8'));
 const gateLog = () => fs.readFileSync(path.join(STATE, 'gate.log'), 'utf8');
-const gateStatus = () => new Promise((resolve, reject) => {
-  const req = http.get({ host: '127.0.0.1', port: readPort('port'), path: '/__pwp/status?pages=0', timeout: 5000 }, (res) => {
+const get = (port, urlPath, timeout) => new Promise((resolve, reject) => {
+  const req = http.get({ host: '127.0.0.1', port, path: urlPath, timeout }, (res) => {
     let body = '';
     res.setEncoding('utf8');
     res.on('data', (chunk) => {
       body += chunk;
     });
-    res.on('end', () => resolve(JSON.parse(body)));
+    res.on('end', () => resolve({ status: res.statusCode, body }));
   });
   req.on('error', reject);
-  req.on('timeout', () => req.destroy(new Error('gate status timed out')));
+  req.on('timeout', () => req.destroy(new Error(`${urlPath} timed out on port ${port}`)));
+});
+const openLease = (port) => new Promise((resolve, reject) => {
+  const req = http.get({ host: '127.0.0.1', port, path: '/__pwp/lease' }, (res) => {
+    res.resume();
+    resolve(req);
+  });
+  req.on('error', reject);
 });
 const waitFor = async (check, ms) => {
   const end = Date.now() + ms;
@@ -40,7 +47,6 @@ const listenerPid = (port) => {
   return pid;
 };
 
-let session = null;
 let stopped = null;
 const resume = () => {
   if (stopped === null) return;
@@ -51,47 +57,56 @@ const resume = () => {
 };
 
 (async () => {
-  session = mcpSession(PROJ);
-  await session.initialize();
-  assert.match(await session.exec("return 'first'"), /first/, 'the first call opens the browser');
-  const started = await waitFor(async () => {
-    const status = await gateStatus();
-    return status.browser.running && status.browser.pid ? status : null;
-  }, 20000);
-  assert.ok(started, 'the gate reports a running browser after the first call');
-  const pid = listenerPid(started.debugPort);
-
-  const mark = gateLog().length;
-  stopped = pid;
-  process.kill(pid, 'SIGSTOP');
-  const timer = setTimeout(resume, STOP_MS);
-  let reply;
+  const session = mcpSession(PROJ);
+  let lease = null;
   try {
-    reply = await session.exec("return 'during-stop'");
-  } finally {
-    clearTimeout(timer);
+    await session.initialize();
+    assert.match(await session.exec("return 'first'"), /first/, 'the first call starts the gate and the browser');
+    const gate = await waitFor(async () => (fs.existsSync(path.join(STATE, 'port')) ? readPort('port') : null), 10000);
+    assert.ok(gate, 'the gate writes its port');
+    lease = await openLease(gate);
+    const started = await waitFor(async () => {
+      const status = JSON.parse((await get(gate, '/__pwp/status?pages=0', 5000)).body);
+      return status.browser.running && status.leases >= 1 ? status : null;
+    }, 20000);
+    assert.ok(started, 'the gate holds a lease and reports a running browser');
+    const pid = listenerPid(started.debugPort);
+
+    const mark = gateLog().length;
+    stopped = pid;
+    process.kill(pid, 'SIGSTOP');
+    const timer = setTimeout(resume, STOP_MS);
+    let during;
+    try {
+      during = await get(gate, '/json/version', 30000);
+    } finally {
+      clearTimeout(timer);
+      resume();
+    }
+
+    const after = gateLog().slice(mark);
+    assert.doesNotMatch(after, /stopped answering/, 'one missed probe during a request does not restart the browser');
+    assert.doesNotMatch(after, /browser started/, 'no second browser is started');
+    assert.doesNotMatch(after, /went away/, 'one missed probe does not mark the browser gone');
+    assert.match(after, /probe failed 1\/3/, 'the missed probe is logged as one miss');
+    assert.equal(during.status, 200, 'the request made during the stop is answered');
+    assert.match(during.body, /webSocketDebuggerUrl/, 'the answer is the browser version');
+    assert.equal(listenerPid(started.debugPort), pid, 'the same browser answers on the debug port');
+    console.log('ok: one missed probe during a request is logged as one miss; the browser is not restarted and the request is answered');
+
+    lease.destroy();
+    await session.end();
+    await finishTest('callprobe');
+    fs.rmSync(PROJ, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
+    console.log('callprobe: all checks passed');
+    process.exit(0);
+  } catch (error) {
     resume();
+    lease?.destroy();
+    session.stop();
+    await finishTest('callprobe').catch(() => {});
+    console.error(`callprobe: FAILED: ${error.message}`);
+    console.error(`project kept for inspection: ${PROJ}`);
+    process.exit(1);
   }
-
-  const after = gateLog().slice(mark);
-  assert.doesNotMatch(after, /stopped answering/, 'one missed probe during a call does not restart the browser');
-  assert.doesNotMatch(after, /browser started/, 'no second browser is started');
-  assert.doesNotMatch(after, /went away/, 'one missed probe does not mark the browser gone');
-  assert.match(after, /probe failed 1\/3/, 'the missed probe is logged as one miss');
-  assert.match(reply, /during-stop/, 'the call made during the stop returns its result');
-  assert.equal(listenerPid(started.debugPort), pid, 'the same browser answers on the debug port');
-  console.log('ok: one missed probe during a call is logged as one miss; the browser is not restarted and the call returns');
-
-  await session.end();
-  await finishTest('callprobe');
-  fs.rmSync(PROJ, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
-  console.log('callprobe: all checks passed');
-  process.exit(0);
-})().catch(async (error) => {
-  resume();
-  session?.stop();
-  await finishTest('callprobe').catch(() => {});
-  console.error(`callprobe: FAILED: ${error.message}`);
-  console.error(`project kept for inspection: ${PROJ}`);
-  process.exit(1);
-});
+})();
