@@ -39,3 +39,13 @@ Phase B results before option 1 (commit after eb853a0 plus this doc change; noth
 - node test/memory.cjs (M2): exit 1, wall 147693 ms. Output: "memory: FAILED: memory uses-browser left its own processes behind: 494863 gate, 494894 playwriter-mcp, 494896 playwriter-mcp". Red. The same failure reproduces on a41c6af, so it predates Round 5. Cause: the uses-browser scenario ends with a caller page still open; an open page holds the browser until PLAYWRITER_IDLE_MS (300 s) when no lease is held, and memory.cjs waits 40 s for drain.
 
 Decision: option 1, chosen for this round. The uses-browser scenario of test/memory.cjs closes its pages before session.end(), so it exits instead of waiting for PLAYWRITER_IDLE_MS. The change was re-derived from the tree; /tmp/memory-option1.patch was not applied.
+Phase B on 0c807f9 (the test change and its row; nothing pushed; wall times from /tmp/f1-phaseb/phase-b2.sh and /tmp/f1-phaseb/npmtest-rerun.sh):
+
+- npm test, attempt 1: exit 1, wall 108279 ms. lifecycle: 12 checks passed; leases: FAILED: Expected values to be strictly equal: 0 !== 1. Inferred from the output order: the bare gate-count assert.equal after the six-second wait in idleSessionWhileSharedCallRuns, so the gate was missing six seconds into a shared call.
+- npm test, attempt 2 (rerun of this row only): exit 1, wall 163334 ms. lifecycle: 12 checks passed; leases: FAILED: leases left its own processes behind: 579499 playwriter-mcp, 579501 playwriter-mcp.
+- npm run f1: exit 0, wall 8576 ms. Output: F1 defaultHas=true executorIsDefault=true contexts=1; firstPageSurvivedGateKill: true.
+- npm run orphan: exit 0, wall 27578 ms. Both scenarios end with after exit 0 and restarted gate owns browser: true.
+- npm run mode: exit 0, wall 5280 ms. extensionsConnected 0, relays 0, childrenWithDirectUrl equal to executorChildren (1).
+- node test/memory.cjs (M3): exit 0, wall 96010 ms. drainMs 5113; afterSessionEnd processes 0.
+
+Open: npm test is red on two attempts, with two different leases failures. After attempt 2, a Chromium from that run was still running with its gate gone and its project directory deleted. It answered /json/version and listed its page, so the gate exited while its own healthy browser was up. Candidate exit paths in bin/playwriter-project: the tick check that exits when the browser is down and no call is in flight (it does not check leaseHolders and does not stop the browser), and exitUnleased, where releaseBrowser returns early when chromeUp is false. This breaks the item 1 rule that a browser a gate starts is closed when that gate exits. Nothing is pushed until npm test is green.
