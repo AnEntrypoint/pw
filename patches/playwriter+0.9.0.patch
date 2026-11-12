@@ -1,0 +1,88 @@
+diff --git a/node_modules/playwriter/dist/executor.js b/node_modules/playwriter/dist/executor.js
+--- a/node_modules/playwriter/dist/executor.js
++++ b/node_modules/playwriter/dist/executor.js
+@@ -713,6 +713,20 @@
+     isHeadlessMode() {
+         return !!this.cdpConfig.headless;
+     }
++    async defaultBrowserContext(browser) {
++        if (browser.contexts().length === 0) {
++            const session = await browser.newBrowserCDPSession();
++            await session.send('Target.createTarget', { url: 'about:blank' });
++            await session.detach();
++            const until = Date.now() + 5000;
++            while (browser.contexts().length === 0 && Date.now() < until) {
++                await new Promise((resolve) => setTimeout(resolve, 50));
++            }
++        }
++        const contexts = browser.contexts();
++        return contexts.length > 0 ? contexts[0] : await browser.newContext();
++    }
++
+     /**
+      * Connect to Chrome and set up the context. Shared by ensureConnection and reset.
+      * Never opens a tab: the sandbox has no default page, code creates or picks its own.
+@@ -733,8 +747,7 @@
+                 this.logger.log('Browser disconnected, clearing connection state');
+                 this.clearConnectionState();
+             });
+-            const contexts = browser.contexts();
+-            const context = contexts.length > 0 ? contexts[0] : await browser.newContext();
++            const context = await this.defaultBrowserContext(browser);
+             context.setDefaultTimeout(60000);
+             context.setDefaultNavigationTimeout(10000);
+             context.on('page', (page) => {
+@@ -760,8 +773,7 @@
+             this.logger.log('Browser disconnected, clearing connection state');
+             this.clearConnectionState();
+         });
+-        const contexts = browser.contexts();
+-        const context = contexts.length > 0 ? contexts[0] : await browser.newContext();
++        const context = await this.defaultBrowserContext(browser);
+         // Action timeout (click, fill, hover, etc.) is longer to tolerate slower
+         // SPA/Turbo navigations and post-click settling on real sites.
+         // Navigation timeout (goto, reload) remains separate.
+diff --git a/node_modules/playwriter/src/executor.ts b/node_modules/playwriter/src/executor.ts
+--- a/node_modules/playwriter/src/executor.ts
++++ b/node_modules/playwriter/src/executor.ts
+@@ -946,6 +946,20 @@
+     return !!this.cdpConfig.headless
+   }
+ 
++  private async defaultBrowserContext(browser: Browser): Promise<BrowserContext> {
++    if (browser.contexts().length === 0) {
++      const session = await browser.newBrowserCDPSession()
++      await session.send('Target.createTarget', { url: 'about:blank' })
++      await session.detach()
++      const until = Date.now() + 5000
++      while (browser.contexts().length === 0 && Date.now() < until) {
++        await new Promise((resolve) => setTimeout(resolve, 50))
++      }
++    }
++    const contexts = browser.contexts()
++    return contexts.length > 0 ? contexts[0] : await browser.newContext()
++  }
++
+   /**
+    * Connect to Chrome and set up the context. Shared by ensureConnection and reset.
+    * Never opens a tab: the sandbox has no default page, code creates or picks its own.
+@@ -969,8 +983,7 @@
+         this.clearConnectionState()
+       })
+ 
+-      const contexts = browser.contexts()
+-      const context = contexts.length > 0 ? contexts[0] : await browser.newContext()
++      const context = await this.defaultBrowserContext(browser)
+ 
+       context.setDefaultTimeout(60000)
+       context.setDefaultNavigationTimeout(10000)
+@@ -1006,8 +1019,7 @@
+       this.clearConnectionState()
+     })
+ 
+-    const contexts = browser.contexts()
+-    const context = contexts.length > 0 ? contexts[0] : await browser.newContext()
++    const context = await this.defaultBrowserContext(browser)
+ 
+     // Action timeout (click, fill, hover, etc.) is longer to tolerate slower
+     // SPA/Turbo navigations and post-click settling on real sites.
