@@ -1102,6 +1102,20 @@ function proxyMcp(ports, direct) {
   }
 }
 
+async function replaceStaleGate(ports) {
+  const built = readRaw(BROWSER_FINGERPRINT)?.trim() ?? null;
+  const wanted = browserFingerprint();
+  if (built === null || built === wanted) return null;
+  const status = await httpJson(ports.gate, '/__pwp/status?pages=0', 1000);
+  if (!status) return null;
+  if (status.leases > 0) return `the browser was started as ${built}, not ${wanted}; it is not restarted while ${status.leases} other lease(s) hold this project's gate`;
+  try {
+    process.kill(status.gate.pid, 'SIGTERM');
+  } catch {}
+  await waitFor(async () => !(await httpOk(ports.gate, '/__pwp/ping', 500)), 15000);
+  return null;
+}
+
 async function main(argv) {
   if (argv[0] === '--gate') return runGate(await loadPorts());
   if (argv[0] === 'help' || argv[0] === '--help') return console.log(USAGE);
@@ -1113,6 +1127,10 @@ async function main(argv) {
 
   if (argv.length === 0) return proxyMcp(ports, direct);
 
+  if (argv[0] === 'start') {
+    const note = await replaceStaleGate(ports);
+    if (note) console.error(`playwriter-project: ${note}`);
+  }
   const lease = await acquireLease(ports.gate);
 
   if (argv[0] === 'start') {
