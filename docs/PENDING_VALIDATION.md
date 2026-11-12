@@ -206,7 +206,7 @@ Lifecycle failure report (977174c, Phase A; Phase B on 12a74ad):
 ## Item 10: stale-foreign after gm be9909f (Phase A, then Phase B)
 
 - gm fix: AnEntrypoint/gm main is at be9909f (lanmower, "browser scope: playwriter kept across run end; check kills by pid and start time"). Read without touching gm: `git ls-remote https://github.com/AnEntrypoint/gm refs/heads/main` returns be9909ff2fff1f822f3b03f0ae9dd5d8b1418962, and `gh api repos/AnEntrypoint/gm/commits/be9909f` gives the message above. be9909f is not an object in this repo, which is expected.
-- Pre-run check (22:03 UTC): no check-lazy-browser, check-browser-first-open or check-browser-scope process, and no stale.cjs, lifecycle or phase-b process. Live gm worker sessions are running (pids 1179658, 1179697, 1179745, 1179773, 1179783, 1199553). They are long-lived session servers, and 1179697 serves this connection, so they do not exit on their own and were not waited on. The one that matters for item 10 is none of them.
+- Pre-run check (before 22:05:31 UTC): no check-lazy-browser, check-browser-first-open or check-browser-scope process, and no stale.cjs, lifecycle or phase-b process. Live gm worker sessions are running (pids 1179658, 1179697, 1179745, 1179773, 1179783, 1199553). They are long-lived session servers, and 1179697 serves this connection, so they do not exit on their own and were not waited on. The one that matters for item 10 is none of them.
 - gm gate: pid 1180507 is live with PLAYWRITER_PROJECT_DIR=/workspace/gm. It belongs to gm, and it was not touched.
 - Gate 2531: no process with pid 2531, and no TCP listener on port 2531 (state 0A in /proc/net/tcp and tcp6). Foreign pids 9567, 10301 and 10302 are gone.
 - Phase A change: none needed. test/stale.cjs foreign spawns its own stub on a free port in its own temp directory (pw-stale-foreign-*) and never uses port 2531. Its cleanup signals only its own stub handle, and projectProcs and ownedRows stop only processes whose command line or env names its temp directory or PWP_TEST_TOKEN (test/support.cjs). The launcher prints the message the witness asserts (bin/playwriter-project:1165, isOwnGate). Witness: node test/stale.cjs foreign, run alone in Phase B.
@@ -226,7 +226,7 @@ Lifecycle failure report (977174c, Phase A; Phase B on 12a74ad):
   - Edits to test/lifecycle.cjs and test/lifecycle-forced.cjs (actionSeq 2537 to 2548), then 21:51:07 to 21:51:49: pb-cleanup-rerun, cleanup alone on that working tree (exit 0, 41388 ms). The same tree was committed as 12a74ad (actionSeq 2568).
   - 21:52:33 to 22:02:11: pb-final, lifecycle alone on 12a74ad (exit 0, 41829 ms), then the full set (worst exit 0, 535889 ms). A job-stuck event was raised at 21:56:33 with no progress for 198 s; the job finished normally at 22:02:11 with exit 0.
   - Docs commit b8d5c79 and the push of 52ce466..b8d5c79 (actionSeq 2661 to 2667).
-  - From about 22:03 UTC (actionSeq 2673 on): read-only checks for item 10 and the ancestry check above, and one next_context call with no task argument to read the pending job events.
+  - From actionSeq 2673, before 22:05:31 UTC: read-only checks for item 10 and the ancestry check above, and one next_context call with no task argument to read the pending job events.
 
 - Phase B for item 10: pending, recorded below after the run.
 
@@ -242,7 +242,7 @@ Lifecycle failure report (977174c, Phase A; Phase B on 12a74ad):
 
 ## gm run b8bdb4: steps after the Phase A record (step 4, continued)
 
-- 22:03 to 22:20 UTC (actionSeq 2716 to 2763): Phase A commit 4798aa1; job pb-foreign1 (stale-foreign alone, 3368 ms); job pb-foreign-final (foreign rerun alone, 3366 ms; full set, 541507 ms); this docs commit and the push. The run is not finished and its task is unchanged.
+- After 22:05:31 UTC (actionSeq 2716 to 2766): Phase A commit 4798aa1; job pb-foreign1 (stale-foreign alone, 3368 ms, ended 22:06:13 UTC); job pb-foreign-final (foreign rerun alone, 3366 ms; full set, 541507 ms), the last job, ended 22:15:28 UTC; docs commit 5287fd3 and its push. The run is not finished and its task is unchanged.
 
 ## Item 4: the cause of gate 2531’s disappearance (read-only evidence)
 
