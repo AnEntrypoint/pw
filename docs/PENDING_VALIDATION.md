@@ -202,3 +202,30 @@ Lifecycle failure report (977174c, Phase A; Phase B on 12a74ad):
 - Phase B on 12a74ad: lifecycle alone exit 0, wall 41829 ms. Full set once (logdir /tmp/tmp.UjWGIip6ci; runner worst exit 0, wall 535889 ms; leftover 0 on every row): npm-test 196665 ms, f1 8065 ms, orphan 26603 ms, mode 5002 ms, memory 96532 ms, phase-b 17844 ms, start-refusal 6312 ms, signal 1690 ms, stale-replace 5952 ms, stale-held 7071 ms, stale-unanswering 18579 ms, stale-nosandbox 27646 ms, lifecycle-nosandbox 41469 ms, lifecycle-forced-check11 34382 ms, lifecycle-forced-cleanup 41604 ms. Not run: stale-foreign (item 10).
 - Final-tree forced failure files: /tmp/pw-test-5GhfVS (check11) holds failure: forced failure at check 11, line 210, checks passed 10, AssertionError at lifecycle.cjs:210:35, and gate status JSON with browser pid 1307002 running and leases 0. /tmp/pw-test-RpJxaz (cleanup) holds failure: forced failure in cleanup, line 224, checks passed 12, Error at lifecycle.cjs:224:36, and gate status not answering: connection error ECONNREFUSED on port 9500. Both are kept, with /tmp/pw-test-ULwlYz, /tmp/pw-test-Nt98tI and /tmp/pw-test-Z4Mhrs from earlier runs of this stretch. No process references the kept directories after the full set.
 - The cause of the one failed debug-port probe in the 19:25:34Z run is still open. Any future lifecycle failure now writes its message, line, stack, probe reasons, gate status and log tails to failure.txt in its kept directory.
+
+## Item 10: stale-foreign after gm be9909f (Phase A, then Phase B)
+
+- gm fix: AnEntrypoint/gm main is at be9909f (lanmower, "browser scope: playwriter kept across run end; check kills by pid and start time"). Read without touching gm: `git ls-remote https://github.com/AnEntrypoint/gm refs/heads/main` returns be9909ff2fff1f822f3b03f0ae9dd5d8b1418962, and `gh api repos/AnEntrypoint/gm/commits/be9909f` gives the message above. be9909f is not an object in this repo, which is expected.
+- Pre-run check (22:03 UTC): no check-lazy-browser, check-browser-first-open or check-browser-scope process, and no stale.cjs, lifecycle or phase-b process. Live gm worker sessions are running (pids 1179658, 1179697, 1179745, 1179773, 1179783, 1199553). They are long-lived session servers, and 1179697 serves this connection, so they do not exit on their own and were not waited on. The one that matters for item 10 is none of them.
+- gm gate: pid 1180507 is live with PLAYWRITER_PROJECT_DIR=/workspace/gm. It belongs to gm, and it was not touched.
+- Gate 2531: no process with pid 2531, and no TCP listener on port 2531 (state 0A in /proc/net/tcp and tcp6). Foreign pids 9567, 10301 and 10302 are gone.
+- Phase A change: none needed. test/stale.cjs foreign spawns its own stub on a free port in its own temp directory (pw-stale-foreign-*) and never uses port 2531. Its cleanup signals only its own stub handle, and projectProcs and ownedRows stop only processes whose command line or env names its temp directory or PWP_TEST_TOKEN (test/support.cjs). The launcher prints the message the witness asserts (bin/playwriter-project:1165, isOwnGate). Witness: node test/stale.cjs foreign, run alone in Phase B.
+
+## Ancestry of the defensive patch 33d11b1..146b3ae (step 5)
+
+- Earlier claim, withdrawn: "33d11b1..146b3ae are not on main." It came from `git log --oneline -30`, which stops before these commits. It was wrong.
+- Evidence in this repo: `git merge-base --is-ancestor 33d11b1 origin/main` exits 0; `git merge-base --is-ancestor 146b3ae origin/main` exits 0; `git merge-base --is-ancestor 146b3ae main` exits 0; `git rev-list --count 33d11b1^..146b3ae` is 2 (33d11b1 "patch: playwriter 0.9.0 takes the first page in the default context when the browser lists none", 146b3ae "install: patch-package applies the playwriter patch on install, and test/patch.cjs fails when it is missing"); `git branch -a --contains 146b3ae` lists main, origin/main and origin/HEAD.
+- Conclusion: both commits are ancestors of origin/main. The defensive patch is on main, and nothing needs to be reverted or re-pushed for it.
+
+## gm run 2026-11-12-17-54-18-b8bdb4 (step 4)
+
+- The run is not finished, its task is not replaced, and it is not changed further. Its status belongs to the dispatcher. Its task text describes a launcher-leak stretch (commits 33d11b1..146b3ae, now confirmed on main above); the steps below are from the Phase B queue, not that task.
+- Steps I ran inside it, UTC, from its job log and event log:
+  - 21:47:59 to 21:48:41: pb-life1, lifecycle alone on 977174c (exit 0, 41655 ms).
+  - 21:48:51 to 21:50:08: pb-forced2, check11 then cleanup forced witnesses on 977174c (check11 exit 0; cleanup exit 1 because its gate-status expectation was wrong for that point).
+  - Edits to test/lifecycle.cjs and test/lifecycle-forced.cjs (actionSeq 2537 to 2548), then 21:51:07 to 21:51:49: pb-cleanup-rerun, cleanup alone on that working tree (exit 0, 41388 ms). The same tree was committed as 12a74ad (actionSeq 2568).
+  - 21:52:33 to 22:02:11: pb-final, lifecycle alone on 12a74ad (exit 0, 41829 ms), then the full set (worst exit 0, 535889 ms). A job-stuck event was raised at 21:56:33 with no progress for 198 s; the job finished normally at 22:02:11 with exit 0.
+  - Docs commit b8d5c79 and the push of 52ce466..b8d5c79 (actionSeq 2661 to 2667).
+  - From about 22:03 UTC (actionSeq 2673 on): read-only checks for item 10 and the ancestry check above, and one next_context call with no task argument to read the pending job events.
+
+- Phase B for item 10: pending, recorded below after the run.
