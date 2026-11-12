@@ -20,7 +20,6 @@ const PLAYWRITER_BIN = path.join(PLAYWRITER_DIR, 'bin.js');
 const HOST = '127.0.0.1';
 const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
 const GRACE_MS = 5000;
-const PAGE_IDLE_MS = Number(process.env.PLAYWRITER_PAGE_IDLE_MS) || 60000;
 const CHROME_TRIMS = [
   '--disable-extensions',
   '--disable-background-networking',
@@ -69,7 +68,7 @@ const WEBGPU_LABS = ['enable-unsafe-webgpu', 'enable-vulkan@1', 'enable-webgpu-d
 const USAGE = [
   'usage: playwriter-project [start | status [--json] | session [flags] | help | playwriter-args...]',
   '  (no args)  playwriter MCP server bound to this project browser (use in .mcp.json); each tool result ends with a status block',
-  '  start      open this project browser and check it answers; it stops when no session holds a lease',
+  '  start      open this project browser and check it answers; it stays up while a session holds a lease, a page is open, or for the idle time',
   '  status     show the gate, every Chromium browser on this machine, and the pages of this project; --json prints JSON',
   '  session    create a CLI session bound to this project browser',
   '  <args>     run `playwriter <args>` bound to this project browser',
@@ -89,6 +88,8 @@ const logTail = (file) => {
   }
 };
 const log = (line) => fs.appendFileSync(GATE_LOG, `${new Date().toISOString()} ${line}\n`);
+const browserFingerprint = () => [process.env.PLAYWRITER_BROWSER_PATH || LINUX_BROWSERS.find((candidate) => fs.existsSync(candidate)) || '', process.env.PLAYWRITER_NO_SANDBOX ? 'no-sandbox' : '', process.env.PLAYWRITER_WEBGPU === '1' ? 'webgpu' : ''].join('|');
+const isCallerPage = (target) => target.type === 'page' && !target.url.startsWith('about:') && !target.url.startsWith('chrome://') && !target.url.startsWith('devtools://');
 const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, ...options });
 
 function httpGet(port, urlPath, timeout = 3000) {
@@ -344,13 +345,12 @@ function runGate({ gate, debug }) {
   const sockets = new Set();
   let everLeased = false;
   let graceTimer = null;
-  let pagesClosed = false;
   let lastLeaseEvent = Date.now();
+  let holdUntil = 0;
   const totalBusy = () => [...leaseHolders.values()].reduce((sum, lease) => sum + lease.busy, 0);
 
   const touch = () => {
     lastActivity = Date.now();
-    pagesClosed = false;
   };
   const probe = () => httpOk(debug, '/json/version');
   const gone = async () => !(await probe());
@@ -506,28 +506,37 @@ function runGate({ gate, debug }) {
     return stopping;
   };
 
-  const releaseBrowser = async () => {
+  const isHeld = async () => {
+    if (!chromeUp || !(await probe())) return false;
+    if (Date.now() < holdUntil) return true;
+    return ((await httpJson(debug, '/json/list', 3000)) ?? []).some(isCallerPage);
+  };
+
+  const releaseBrowser = async (reason) => {
     if (!chromeUp) return;
     if (browser?.adopted) {
       chromeUp = false;
       browser = null;
       return;
     }
-    await stopChrome('last lease released');
+    await stopChrome(reason);
   };
 
-  const exitUnleased = () => {
+  const exitUnleased = async () => {
     graceTimer = null;
     if (leaseHolders.size > 0) return;
+    if (await isHeld()) {
+      log('no lease, but a start hold or an open page keeps the browser up');
+      return;
+    }
+    await releaseBrowser('no lease for the grace period');
     log('gate exiting: no lease for the grace period');
     process.exit(0);
   };
 
   const leaseEmptied = () => {
     log('last lease released');
-    releaseBrowser().then(() => {
-      if (leaseHolders.size === 0) graceTimer ??= setTimeout(exitUnleased, GRACE_MS);
-    });
+    graceTimer ??= setTimeout(exitUnleased, GRACE_MS);
   };
 
   const closeFromCaller = async (params) => {
@@ -626,6 +635,10 @@ function runGate({ gate, debug }) {
       });
       return res.write(`leased ${id}\n`);
     }
+    if (route === '/__pwp/hold') {
+      holdUntil = Math.max(holdUntil, Date.now() + (Number(params.get('ms')) || IDLE_MS));
+      return res.end('ok\n');
+    }
     if (route === '/__pwp/busy') {
       const lease = leaseHolders.get(Number(params.get('id')));
       if (lease) {
@@ -650,12 +663,6 @@ function runGate({ gate, debug }) {
       .catch((error) => socket.end(`HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n${error.message}`));
   });
 
-  const closePages = async () => {
-    const pages = ((await httpJson(debug, '/json/list', 3000)) ?? []).filter((target) => target.type === 'page');
-    for (const page of pages) await httpGet(debug, `/json/close/${page.id}`, 3000);
-    return pages.length;
-  };
-
   const closeBlankTabs = async () => {
     const pages = ((await httpJson(debug, '/json/list', 3000)) ?? []).filter((target) => target.type === 'page');
     const blank = pages.filter((page) => page.url === 'about:blank');
@@ -679,12 +686,7 @@ function runGate({ gate, debug }) {
       }
     }
     const idle = Date.now() - lastActivity;
-    if (chromeUp && !pagesClosed && leaseHolders.size > 0 && totalBusy() === 0 && idle >= PAGE_IDLE_MS) {
-      pagesClosed = true;
-      log(`closed ${await closePages()} idle page(s); the browser stays up for the lease`);
-    } else if (chromeUp && !pagesClosed) {
-      await closeBlankTabs();
-    }
+    if (chromeUp) await closeBlankTabs();
     if (chromeUp && idle >= IDLE_MS && leaseHolders.size === 0) {
       if (browser?.adopted) {
         chromeUp = false;
@@ -692,6 +694,9 @@ function runGate({ gate, debug }) {
       } else {
         await stopChrome();
       }
+    }
+    if (chromeUp && leaseHolders.size === 0 && Date.now() - lastLeaseEvent >= GRACE_MS && !(await isHeld())) {
+      await releaseBrowser('no lease and no open page');
     }
     if (!everLeased && !chromeUp && leaseHolders.size === 0 && idle >= IDLE_MS) {
       log('gate exiting: never leased, idle');
@@ -1078,6 +1083,7 @@ async function main(argv) {
   if (argv[0] === 'start') {
     const res = await fetch(`http://${base}/json/version`, { signal: AbortSignal.timeout(60000) });
     console.error(res.ok ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed (${res.status})`);
+    if (res.ok) await httpGet(ports.gate, `/__pwp/hold?ms=${IDLE_MS}`, 2000);
     lease.destroy();
     process.exit(res.ok ? 0 : 1);
   }
