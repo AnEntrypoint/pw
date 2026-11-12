@@ -63,6 +63,7 @@ const GATE_LOG = path.join(STATE, 'gate.log');
 const BROWSER_LOG = path.join(STATE, 'browser.log');
 const LINUX_BROWSERS = ['/opt/google/chrome/chrome', '/usr/lib/chromium/chromium.real'];
 const BROWSER_PID = path.join(STATE, 'browser.pid');
+const BROWSER_FINGERPRINT = path.join(STATE, 'browser.fingerprint');
 const WEBGPU_LABS = ['enable-unsafe-webgpu', 'enable-vulkan@1', 'enable-webgpu-developer-features'];
 
 const USAGE = [
@@ -395,7 +396,7 @@ function runGate({ gate, debug }) {
     const owner = liveProfileOwner();
     if (owner) {
       log(`start deferred: profile lock held by live pid ${owner}`);
-      if (await waitFor(probe, 30000)) return adopt();
+      if (await waitFor(probe, 30000)) return adopt(false);
       throw new Error(`profile ${PROFILE} is held by live pid ${owner}, which does not answer on port ${debug}; not starting another browser`);
     }
     if (process.env.PLAYWRITER_WEBGPU === '1') seedLabs(PROFILE, WEBGPU_LABS);
@@ -432,6 +433,7 @@ function runGate({ gate, debug }) {
         return;
       }
       fs.writeFileSync(BROWSER_PID, `${pid}\n`);
+      fs.writeFileSync(BROWSER_FINGERPRINT, `${browserFingerprint()}\n`);
       browser = { pid, source: 'gate', adopted: false, warning: null };
       return;
     }
@@ -442,9 +444,27 @@ function runGate({ gate, debug }) {
     throw new Error(`browser did not open debug port ${debug}; see ${BROWSER_LOG}: ${logTail(BROWSER_LOG)}`);
   };
 
-  const adopt = () => {
+  const stopAdopted = async (pid) => {
+    await closeBrowser();
+    if (!(await waitFor(gone, 10000))) {
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+      await waitFor(gone, 5000);
+    }
+    browser = null;
+    fs.rmSync(BROWSER_PID, { force: true });
+    fs.rmSync(BROWSER_FINGERPRINT, { force: true });
+  };
+
+  const adopt = async (allowRestart) => {
     const pid = listenerPid(debug);
     const recorded = readRecordedPid();
+    const built = readRaw(BROWSER_FINGERPRINT)?.trim() ?? null;
+    const wanted = browserFingerprint();
+    if (allowRestart && pid !== null && pid === liveProfileOwner() && built !== wanted) {
+      log(`browser pid ${pid} was started as ${built ?? 'an unrecorded browser'}, not ${wanted}; stopping it to start the configured browser`);
+      await stopAdopted(pid);
+      return startChrome();
+    }
     const adopted = pid === null || pid !== recorded;
     const warning = adopted
       ? `browser pid ${pid ?? 'unknown'} on debug port ${debug} is not the recorded pid ${recorded ?? 'none'}; it was not stopped, and another browser may share this project`
@@ -465,7 +485,7 @@ function runGate({ gate, debug }) {
       log('browser stopped answering; starting it again');
     }
     starting ??= (async () => {
-      if (await probe()) adopt();
+      if (await probe()) await adopt(true);
       else await startChrome();
       chromeUp = true;
       missedProbes = 0;
@@ -499,6 +519,7 @@ function runGate({ gate, debug }) {
       dropSockets();
       browser = null;
       fs.rmSync(BROWSER_PID, { force: true });
+      fs.rmSync(BROWSER_FINGERPRINT, { force: true });
       log('browser stopped');
     })().finally(() => {
       stopping = null;
