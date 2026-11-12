@@ -68,3 +68,9 @@ Phase B on fb927aa (the gate exit fix in 283206 and the test fix in fb927aa; npm
 - node test/memory.cjs: exit 0, wall 96302 ms. drainMs 11 (never-uses-browser) and 5617 (uses-browser).
 
 Before the test fix, on 283206: npm test exit 1, wall 62150 ms, leases: gate and browser stop within 10 s of a SIGKILLed launcher, and nothing answers on the debug port; lifecycle then leases exit 1, wall 78964 ms, leases: gate and browser stop within 10 s once both launchers are dead, and nothing answers on the debug port. The cause was the executor child: the 10 s checks counted it, and it lives about 5 s past the gate exit (the gate and browser were gone at 5.2 s, the child at 10.3 s). The 10 s checks counted only the gate and browser before the port check was added, so fb927aa restores those counts and keeps the port check. The 60 s retirement checks still count the executor child.
+
+Round 7 (gate signals and the first-open call site; docs only in Phase A, no build or code change):
+
+- docs/UPSTREAM_PLAYWRITER.md (S1): records that SIGINT, SIGTERM and SIGHUP exit the gate even while a lease is held, and why; the build is unchanged. Witness: the "Gate signals" section exists, and the signal loop is at bin/playwriter-project:778-779.
+- docs/UPSTREAM_PLAYWRITER.md (C1): the first-open call-site candidates (gm kOpenRunContext, dist/executor.js:727 fallback, :797 headless, :1435 reset) and the rule for the verdict. Witness: the Phase B row below, npm run f1 (test/firstpage.cjs), which prints firstPageSurvivedGateKill and the executor's context against contexts[0]; the verdict is written after that run.
+- Phase B for Round 7: npm test once, npm run f1 once, each with exit code and wall time, logs in a mktemp -d directory. Nothing is pushed unless every row is green.

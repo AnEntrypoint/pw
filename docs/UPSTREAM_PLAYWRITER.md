@@ -24,3 +24,20 @@ Conclusion: the fresh-context loss the owner described was not reproduced in any
 The repro that lost the page: the browser start, the first call, the gate kill and the restart, the Chrome version, and whether extension mode was used. The launcher always sets PLAYWRITER_DIRECT, so extension mode (`dist/executor.js` line 764) is not on the launcher path.
 
 If the loss is reproduced, the upstream test should start Chrome in the owner's conditions, open a page through the executor, disconnect the executor, and check the page is still listed. The zero-window probe above passes unpatched, so it cannot be that test.
+
+## Gate signals (decision, launcher, no build change)
+
+SIGINT, SIGTERM and SIGHUP exit the gate even while a lease is held. The handler is the `for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])` loop in `bin/playwriter-project` that calls `exitGate(..., { force: true })`.
+
+Reason: a signal is an explicit kill, so holding the gate open would refuse the request to stop. The launcher reopens the gate on the next call, the same restart path the SIGKILL checks in `test/firstpage.cjs` and `test/orphan.cjs` measure. Every other exit path keeps the rule that the gate never exits with a lease held, and every exit stops the browser the gate started.
+
+## First-open call site (decision, measured in Phase B)
+
+Candidates on the first-open path that create or pick a browser context:
+
+1. gm's own `browser.newContext()` in `kOpenRunContext` (`native/components/host/browser_scope.cpp` in the gm repo). This is the call site that lost the page on the pin (gm witness `contexts=[1,1,0] executorIndex=2`). Playwright creates such a context with `disposeOnDetach`, so Chrome disposes it when the gate's connection closes. The defensive patch does not cover it, because it never reaches `defaultBrowserContext`. gm commit 23a88df removed the call: the first open takes `browser.contexts()[0]`, and gm HEAD has no `newContext` in `browser_scope.cpp`. This is fixed on the gm side.
+2. `dist/executor.js:727` (and the matching line in `src/executor.ts`): the fallback `browser.newContext()` inside `defaultBrowserContext`. It runs only when Playwright still lists no context after the about:blank target and the 5 s wait. The patch keeps this fallback as it was. It is the one call on the launcher's direct path that the patch does not cover.
+3. `dist/executor.js:797` (`connectHeadlessBrowser`): headless mode only. The launcher sets PLAYWRITER_DIRECT and does not use this branch for the gate's browser, so it is off the first-open path.
+4. `dist/executor.js:1435` (`resetPlaywright`, through `resetInternal`): calls `connectToBrowser`, so the patched helper covers it.
+
+Rule: if the page is lost at candidate 2, the default-context fix is extended there. If the page survives, the measured reason is recorded here and no code changes. Verdict: pending the Phase B row (`npm run f1`, docs/PENDING_VALIDATION.md, Round 7).
