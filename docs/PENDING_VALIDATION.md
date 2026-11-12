@@ -103,3 +103,19 @@ Round 8 (the queue: the Phase B runner, the signals, fallback and cold start wit
   - npm run mode: exit 0, wall 4900 ms. extensionsConnected 0, relays 0, childrenWithDirectUrl 1.
   - node test/memory.cjs: exit 0, wall 96164 ms (item 7 above).
   - npm run phase-b: exit 0, wall 17806 ms. Output: "phase-b: all checks passed".
+
+Round 9 (the stale-gate work on f26b5ce; Phase A commits, then Phase B on the tree of e4ecc3b):
+
+- Commits, in order: 320a7fb (start waits up to 60 s for the browser), 565018c (the identity check before SIGTERM, the 15 s refusal, the ESRCH-only catch, commandOf at module level), e4ecc3b (test/stale.cjs with four modes, npm scripts for each, and the npm test chain). The tested tree is the working tree the runner ran at 22:18:08 local, after its last edit at 22:18:00. It was first one local commit, 4d9c50b, which was never pushed. It was regrouped into the three commits above, and `git diff 4d9c50b e4ecc3b` is empty.
+- Start race, fixed in 320a7fb: on a fresh gate, start printed "browser failed (503)". The gate log shows the browser started at 20:15:50.214Z and the lease released at 20:15:50.423Z, so the 503 came from the proxied debug port before it opened.
+- Witness replace (no lease): old gate 933284 gone in 14 ms, its browser 933299 gone in 13 ms, and the new gate 933516 answers. Output: "stale: all checks passed".
+- Witness held: the leased gate 933993 and browser 934121 are not replaced, and the note prints: "the browser was started as ..., not ...; it is not restarted while 1 other lease(s) hold this project's gate".
+- Fix (b), witness unanswering: a gate that ignores SIGTERM for 15 s fails the start with "gate N still answers on port P 15 s after SIGTERM; no lease was taken on it" (exit 1), and the stub receives no /__pwp/lease request. Before the fix, the same row failed with "gate on port 40481 did not grant a lease", so a lease had been requested.
+- Fix (c), witness foreign: a process on the gate port that lacks this launcher's --gate is not signalled. It is still running after the start, which exits 1 with "is not this project's gate (pid N); it was not signalled and no lease was taken on it", and no lease request reaches it. Before the fix, the start went on past it and printed "browser failed (503)".
+- The ESRCH-only catch has no witness. A dead pid cannot be the listener on the port, so the test cannot reach ESRCH, and EPERM needs a process owned by another user.
+- Test environment: the first stale runs deleted PLAYWRITER_NO_SANDBOX, which this shell exports as 1, and the first browser did not start. The cause was not isolated; the 503 race above is confirmed separately. The rows now set PLAYWRITER_BROWSER_PATH: Chrome for the first gate, and a symlink to the same binary for the second. Whether the browser starts with the variable unset is not tested.
+- Phase B on e4ecc3b (logs /tmp/tmp.0VDH0MW13n; runner worst exit 0; leftover 0 on every row):
+  - npm test: exit 0, wall 190751 ms. tools, lifecycle (12 checks), leases, signals, fallback, ready and stale all passed.
+  - npm run f1: exit 0, wall 8347 ms. npm run orphan: exit 0, wall 27305 ms. npm run mode: exit 0, wall 5167 ms. node test/memory.cjs: exit 0, wall 96459 ms. npm run phase-b: exit 0, wall 17785 ms.
+  - npm run stale-replace: exit 0, wall 5802 ms. npm run stale-held: exit 0, wall 7156 ms. npm run stale-unanswering: exit 0, wall 18603 ms. npm run stale-foreign: exit 0, wall 3493 ms.
+- Watcher, 380 events: 31 gates went away. 26 exited with a log line ("no lease for the grace period", or a signal). The other 5 were killed by their own test: 3 by the SIGKILL in the f1 and orphan witnesses, and 2 stub gates by the cleanup in test/stale.cjs. No oom kill, and no gone event had a gm ancestor.
