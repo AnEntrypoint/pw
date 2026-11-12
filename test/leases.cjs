@@ -12,6 +12,9 @@ const cleanups = new Set();
 const gates = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('--gate')).length;
 const browsers = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('--user-data-dir=') && !row.cmd.includes('--type=')).length;
 const children = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('playwriter/bin.js')).length;
+const debugPort = (proj) => Number(fs.readFileSync(path.join(proj, '.playwriter', 'debug-port'), 'utf8'));
+const answers = (port) => fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
+const retired = async (proj, port) => gates(proj) === 0 && browsers(proj) === 0 && children(proj) === 0 && !(await answers(port));
 
 async function waitFor(check, ms) {
   const started = Date.now();
@@ -65,10 +68,11 @@ async function sigkillReleasesLease() {
     assert.match(await launcher.exec(OPEN), /open/);
     assert.equal(gates(p.proj), 1);
     assert.equal(browsers(p.proj), 1);
+    const port = debugPort(p.proj);
     process.kill(launcher.pid, 'SIGKILL');
-    const took = await waitFor(() => gates(p.proj) === 0 && browsers(p.proj) === 0, DEADLINE_MS);
-    assert.notEqual(took, null, 'gate and browser stop within 10 s of a SIGKILLed launcher');
-    console.log(`ok: SIGKILLed launcher releases its lease; gate and browser gone in ${took} ms`);
+    const took = await waitFor(() => retired(p.proj, port), DEADLINE_MS);
+    assert.notEqual(took, null, 'gate and browser stop within 10 s of a SIGKILLed launcher, and nothing answers on the debug port');
+    console.log(`ok: SIGKILLed launcher releases its lease; gate and browser gone and debug port silent in ${took} ms`);
   } finally {
     await p.stop();
   }
@@ -85,6 +89,7 @@ async function sharedGateKeepsBrowserForLastLease() {
     assert.match(await b.exec(OPEN), /open/);
     assert.equal(gates(p.proj), 1);
     assert.equal(browsers(p.proj), 1);
+    const port = debugPort(p.proj);
     process.kill(a.pid, 'SIGKILL');
     await sleep(7000);
     assert.equal(gates(p.proj), 1);
@@ -92,9 +97,9 @@ async function sharedGateKeepsBrowserForLastLease() {
     assert.match(await b.exec("return 'still-open'"), /still-open/);
     console.log('ok: killing one of two launchers keeps the shared gate and browser for the other');
     process.kill(b.pid, 'SIGKILL');
-    const took = await waitFor(() => gates(p.proj) === 0 && browsers(p.proj) === 0, DEADLINE_MS);
-    assert.notEqual(took, null, 'gate and browser stop within 10 s once both launchers are dead');
-    console.log(`ok: killing both launchers stops the gate and browser in ${took} ms`);
+    const took = await waitFor(() => retired(p.proj, port), DEADLINE_MS);
+    assert.notEqual(took, null, 'gate and browser stop within 10 s once both launchers are dead, and nothing answers on the debug port');
+    console.log(`ok: killing both launchers stops the gate and browser, debug port silent, in ${took} ms`);
   } finally {
     await p.stop();
   }
@@ -111,10 +116,11 @@ async function reopenAfterRelease() {
     assert.equal(gates(p.proj), 1, 'the gate stays while its lease is held');
     assert.equal(browsers(p.proj), 1, 'the browser stays while its lease is held, with no idle close');
     assert.equal(children(p.proj), 1);
+    const port = debugPort(p.proj);
     s.stop();
-    const took = await waitFor(() => browsers(p.proj) === 0 && gates(p.proj) === 0 && children(p.proj) === 0, 60000);
-    assert.notEqual(took, null, 'browser, gate and playwriter child retire once the lease closes');
-    console.log(`ok: browser, gate and child retire ${took} ms after the lease closes`);
+    const took = await waitFor(() => retired(p.proj, port), 60000);
+    assert.notEqual(took, null, 'browser, gate and playwriter child retire once the lease closes, and nothing answers on the debug port');
+    console.log(`ok: browser, gate and child retire ${took} ms after the lease closes, debug port silent`);
     const next = p.session();
     await next.initialize();
     assert.match(await next.exec(REOPEN), /again/);
@@ -135,6 +141,7 @@ async function idleSessionWhileSharedCallRuns() {
     await idle.initialize();
     await busy.initialize();
     assert.match(await idle.exec(OPEN), /open/);
+    const port = debugPort(p.proj);
     const slow = busy.exec("const page = await context.newPage(); await new Promise((r) => setTimeout(r, 9000)); await page.close(); return 'slow-done'");
     await sleep(6000);
     assert.equal(gates(p.proj), 1);
@@ -144,9 +151,9 @@ async function idleSessionWhileSharedCallRuns() {
     console.log('ok: an idle session keeps the shared browser while the other session is mid-call');
     idle.stop();
     busy.stop();
-    const took = await waitFor(() => browsers(p.proj) === 0 && gates(p.proj) === 0 && children(p.proj) === 0, 60000);
-    assert.notEqual(took, null, 'after both sessions close, the browser, gate and children retire');
-    console.log(`ok: both sessions closed; browser, gate and children retired in ${took} ms`);
+    const took = await waitFor(() => retired(p.proj, port), 60000);
+    assert.notEqual(took, null, 'after both sessions close, the browser, gate and children retire, and nothing answers on the debug port');
+    console.log(`ok: both sessions closed; browser, gate and children retired in ${took} ms, debug port silent`);
     const next = p.session();
     await next.initialize();
     assert.match(await next.exec(REOPEN), /again/);

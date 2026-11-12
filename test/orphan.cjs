@@ -8,6 +8,8 @@ const { sleep, projectProcs, stopPids, mcpSession, WRAPPER } = require('./suppor
 const OPEN = "state.orphan = await context.newPage(); await state.orphan.goto('data:text/html,orphan-witness'); return 'opened'";
 const RESTART = "return 'restarted'";
 const count = (proj) => projectProcs(proj).length;
+const gateCount = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('--gate')).length;
+const answers = (port) => fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
 const statusOf = (proj) => JSON.parse(execFileSync(process.execPath, [WRAPPER, 'status', '--json'], {
   cwd: proj,
   env: { ...process.env, PLAYWRITER_PROJECT_DIR: proj, PLAYWRITER_TELEMETRY: '0' },
@@ -24,12 +26,16 @@ async function scenario(name, dropPidFile) {
   const started = Date.now();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orphan-'));
   const counts = { baseline: count(proj) };
+  let exitState = null;
+  let debug = null;
   const launcher = mcpSession(proj, { PLAYWRITER_IDLE_MS: '4000' });
   let adopted = null;
   try {
     await launcher.initialize();
     await launcher.exec(OPEN);
-    const gate = statusOf(proj).gate;
+    const status = statusOf(proj);
+    const gate = status.gate;
+    debug = status.debugPort;
     assert.ok(gate && gate.pid, name + ': a gate runs after the first call');
     counts.started = count(proj);
     process.kill(gate.pid, 'SIGKILL');
@@ -42,11 +48,12 @@ async function scenario(name, dropPidFile) {
     assert.equal(adopted, false, name + ': the restarted gate owns the browser it adopted');
     await launcher.end(3000);
     counts.afterExit = await settle(proj, 40000);
+    exitState = { gates: gateCount(proj), answering: await answers(debug) };
   } finally {
     await stopPids(projectProcs(proj).map((row) => row.pid));
     fs.rmSync(proj, { recursive: true, force: true });
   }
-  return { scenario: name, counts, adoptedAfterRestart: adopted, wallMs: Date.now() - started };
+  return { scenario: name, counts, adoptedAfterRestart: adopted, exitState, wallMs: Date.now() - started };
 }
 
 (async () => {
@@ -60,8 +67,10 @@ async function scenario(name, dropPidFile) {
     }
   }
   for (const r of results) {
-    console.log('orphan ' + r.scenario + ': baseline ' + r.counts.baseline + ' -> started ' + r.counts.started + ' -> after kill ' + r.counts.afterKill + ' -> after restart ' + r.counts.afterRestart + ' -> after exit ' + r.counts.afterExit + '; restarted gate owns browser: ' + (r.adoptedAfterRestart === false) + '; wall ' + r.wallMs + ' ms');
+    console.log('orphan ' + r.scenario + ': baseline ' + r.counts.baseline + ' -> started ' + r.counts.started + ' -> after kill ' + r.counts.afterKill + ' -> after restart ' + r.counts.afterRestart + ' -> after exit ' + r.counts.afterExit + '; restarted gate owns browser: ' + (r.adoptedAfterRestart === false) + '; gates after exit: ' + r.exitState.gates + '; browser answers /json/version after exit: ' + r.exitState.answering + '; wall ' + r.wallMs + ' ms');
     if (r.counts.afterExit !== 0) failed = failed ?? r.scenario + ': ' + r.counts.afterExit + ' processes left after exit';
+    if (r.exitState.gates !== 0) failed = failed ?? r.scenario + ': a gate process remains after exit';
+    if (r.exitState.answering) failed = failed ?? r.scenario + ': a browser it started still answers /json/version after exit';
   }
   if (failed) {
     console.error('orphan: FAILED ' + failed);

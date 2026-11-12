@@ -348,8 +348,6 @@ function runGate({ gate, debug }) {
   let graceTimer = null;
   let lastLeaseEvent = Date.now();
   let holdUntil = 0;
-  const totalBusy = () => [...leaseHolders.values()].reduce((sum, lease) => sum + lease.busy, 0);
-
   const touch = () => {
     lastActivity = Date.now();
   };
@@ -510,19 +508,51 @@ function runGate({ gate, debug }) {
     });
   };
 
+  const commandOf = (pid) => {
+    if (process.platform === 'linux') return readRaw(`/proc/${pid}/cmdline`)?.replaceAll('\0', ' ') ?? '';
+    try {
+      return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      return '';
+    }
+  };
+
+  const ownedBrowserPids = () => [...new Set([
+    browser && !browser.adopted ? browser.pid : null,
+    chromeProc && chromeProc.exitCode === null && chromeProc.signalCode === null ? chromeProc.pid : null,
+    liveProfileOwner(),
+  ])].filter((pid) => pid && pidAlive(pid) && commandOf(pid).includes(`--user-data-dir=${PROFILE}`));
+
+  const signalPids = (pids, signal) => {
+    for (const pid of pids) {
+      try {
+        process.kill(pid, signal);
+      } catch {}
+    }
+  };
+
+  const forgetBrowser = () => {
+    browser = null;
+    fs.rmSync(BROWSER_PID, { force: true });
+    fs.rmSync(BROWSER_FINGERPRINT, { force: true });
+  };
+
   const stopChrome = (reason = 'idle') => {
     stopping ??= (async () => {
       chromeUp = false;
+      if (ownedBrowserPids().length === 0) return forgetBrowser();
       log(`stopping browser: ${reason}`);
       await closeBrowser();
-      if (!(await waitFor(gone, 10000))) {
-        if (chromeProc) chromeProc.kill('SIGTERM');
-        await waitFor(gone, 5000);
+      const down = async () => !(await probe()) && ownedBrowserPids().length === 0;
+      if (!(await waitFor(down, 10000))) {
+        signalPids(ownedBrowserPids(), 'SIGTERM');
+        if (!(await waitFor(down, 5000))) {
+          signalPids(ownedBrowserPids(), 'SIGKILL');
+          await waitFor(down, 2000);
+        }
       }
       dropSockets();
-      browser = null;
-      fs.rmSync(BROWSER_PID, { force: true });
-      fs.rmSync(BROWSER_FINGERPRINT, { force: true });
+      forgetBrowser();
       log('browser stopped');
     })().finally(() => {
       stopping = null;
@@ -538,13 +568,26 @@ function runGate({ gate, debug }) {
   };
 
   const releaseBrowser = async (reason) => {
-    if (!chromeUp) return;
     if (browser?.adopted) {
       chromeUp = false;
       browser = null;
       return;
     }
     await stopChrome(reason);
+  };
+
+  let exiting = false;
+  const exitGate = async (reason, { force = false } = {}) => {
+    if (exiting || (!force && leaseHolders.size > 0)) return;
+    exiting = true;
+    await starting?.catch(() => {});
+    try {
+      await releaseBrowser(reason);
+    } catch (error) {
+      log(`stopping the browser failed: ${error.message}`);
+    }
+    log(`gate exiting: ${reason}`);
+    process.exit(0);
   };
 
   const exitUnleased = async () => {
@@ -554,9 +597,7 @@ function runGate({ gate, debug }) {
       log('no lease, but a start hold or an open page keeps the browser up');
       return;
     }
-    await releaseBrowser('no lease for the grace period');
-    log('gate exiting: no lease for the grace period');
-    process.exit(0);
+    await exitGate('no lease for the grace period');
   };
 
   const leaseEmptied = () => {
@@ -723,24 +764,20 @@ function runGate({ gate, debug }) {
     if (chromeUp && leaseHolders.size === 0 && Date.now() - lastLeaseEvent >= GRACE_MS && !(await isHeld())) {
       await releaseBrowser('no lease and no open page');
     }
-    if (!everLeased && !chromeUp && leaseHolders.size === 0 && idle >= IDLE_MS) {
-      log('gate exiting: never leased, idle');
-      process.exit(0);
-    }
-    if (everLeased && !chromeUp && totalBusy() === 0 && Date.now() - lastLeaseEvent >= GRACE_MS) {
-      log('gate exiting: browser down and no call in flight');
-      process.exit(0);
-    }
+    if (!everLeased && !chromeUp && idle >= IDLE_MS) await exitGate('never leased, idle');
+    if (everLeased && !chromeUp && Date.now() - lastLeaseEvent >= GRACE_MS) await exitGate('browser down and no lease');
   };
 
   server.on('error', (error) => {
-    log(`gate listen failed on ${gate}: ${error.message}`);
-    process.exit(0);
+    exitGate(`gate listen failed on ${gate}: ${error.message}`, { force: true });
   });
   server.listen(gate, HOST, () => log(`gate on ${gate}, browser debug port ${debug}, idle ${IDLE_MS}ms`));
   setInterval(() => {
     tick().catch((error) => log(`tick failed: ${error.message}`));
   }, Math.min(5000, Math.max(200, IDLE_MS / 4)));
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(signal, () => exitGate(`signal ${signal}`, { force: true }));
+  }
 }
 
 async function ensureGate(port) {
