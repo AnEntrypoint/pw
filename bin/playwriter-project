@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { spawn, execFile, execFileSync } = require('node:child_process');
 const { listBrowsers, browserLines, browserReport } = require('../lib/browsers');
+const { signalPid } = require('../lib/signal');
 
 let PLAYWRITER_DIR;
 try {
@@ -466,7 +467,7 @@ function runGate({ gate, debug }) {
   const stopAdopted = async (pid) => {
     await closeBrowser();
     if (!(await waitFor(gone, 10000))) {
-      try { process.kill(pid, 'SIGTERM'); } catch {}
+      signalPid(pid, 'SIGTERM', { log });
       await waitFor(gone, 5000);
     }
     browser = null;
@@ -539,11 +540,7 @@ function runGate({ gate, debug }) {
   ])].filter((pid) => pid && pidAlive(pid) && commandOf(pid).includes(`--user-data-dir=${PROFILE}`));
 
   const signalPids = (pids, signal) => {
-    for (const pid of pids) {
-      try {
-        process.kill(pid, signal);
-      } catch {}
-    }
+    for (const pid of pids) signalPid(pid, signal, { log });
   };
 
   const forgetBrowser = () => {
@@ -1166,11 +1163,7 @@ async function replaceStaleGate(ports) {
   if (status.leases > 0) return `the browser was started as ${built}, not ${wanted}; it is not restarted while ${status.leases} other lease(s) hold this project's gate`;
   const pid = status.gate?.pid;
   if (!isOwnGate(pid, ports.gate)) throw new Error(`the process answering on port ${ports.gate} is not this project's gate (pid ${pid}); it was not signalled and no lease was taken on it`);
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch (error) {
-    if (error.code !== 'ESRCH') console.error(`playwriter-project: could not signal gate ${pid}: ${error.message}`);
-  }
+  signalPid(pid, 'SIGTERM');
   if (!(await waitFor(async () => !(await httpOk(ports.gate, '/__pwp/ping', 500)), 15000))) {
     throw new Error(`gate ${pid} still answers on port ${ports.gate} 15 s after SIGTERM; no lease was taken on it`);
   }
