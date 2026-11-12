@@ -8,6 +8,7 @@ const WRAPPER = path.join(ROOT, 'bin', 'playwriter-project');
 
 const TOKEN = randomUUID();
 process.env.PWP_TEST_TOKEN = TOKEN;
+process.env.PLAYWRITER_NO_SANDBOX = '1';
 const TOKEN_MARK = `PWP_TEST_TOKEN=${TOKEN}\0`;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
