@@ -22,7 +22,9 @@
     "stale-unanswering": "node test/stale.cjs unanswering",
     "stale-foreign": "node test/stale.cjs foreign",
     "start-refusal": "node test/start.cjs",
-    "signal": "node test/signal.cjs"
+    "signal": "node test/signal.cjs",
+    "lifecycle-forced-check11": "node test/lifecycle-forced.cjs check11",
+    "lifecycle-forced-cleanup": "node test/lifecycle-forced.cjs cleanup"
   },
   "engines": {
     "node": ">=22"

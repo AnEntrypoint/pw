@@ -12,6 +12,7 @@ const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-test-'));
 const STATE = path.join(PROJ, '.playwriter');
 const IDLE_MS = 4000;
 const ENV = { ...process.env, PLAYWRITER_PROJECT_DIR: PROJ, PLAYWRITER_IDLE_MS: String(IDLE_MS), PLAYWRITER_TELEMETRY: '0' };
+const FORCE = process.env.PWP_LIFECYCLE_FORCE;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const PROBE_TIMEOUT_MS = 3000;
@@ -119,6 +120,25 @@ const check = (label) => {
   console.log(`ok ${checks}: ${label}`);
 };
 
+const tail = (file, lines = 20) => {
+  try {
+    return fs.readFileSync(file, 'utf8').split('\n').slice(-(lines + 1)).join('\n');
+  } catch (error) {
+    return `unreadable (${error.code ?? error.message})`;
+  }
+};
+const failureLine = (error) => /lifecycle\.cjs:(\d+)/.exec(error.stack ?? '')?.[1] ?? 'unknown';
+const failureReport = (error, status, probeText) => [
+  `failure: ${error.message}`,
+  `line: ${failureLine(error)}`,
+  `checks passed before the failure: ${checks}`,
+  `stack:\n${error.stack}`,
+  `probes:\n${probeText}`,
+  `gate status: ${JSON.stringify(status)}`,
+  `gate.log, last 20 lines:\n${tail(path.join(STATE, 'gate.log'))}`,
+  `browser.log, last 20 lines:\n${tail(path.join(STATE, 'browser.log'))}`,
+].join('\n\n') + '\n';
+
 (async () => {
   const m = mcpClient();
   await m.call(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
@@ -186,6 +206,7 @@ const check = (label) => {
   check('CLI session browser stops after idle');
 
   const after = cli(['-s', sid, '-e', "return (await context.cookies('http://example.test/')).map((c) => c.name + '=' + c.value)"]);
+  if (FORCE === 'check11') assert.fail('forced failure at check 11 (PWP_LIFECYCLE_FORCE=check11)');
   assert.match(after.stdout, /keep=yes/);
   check('CLI session reconnects after idle and the cookie survived');
 
@@ -199,16 +220,25 @@ const check = (label) => {
   console.log(`probes:\n${probeReport()}`);
 })()
   .then(async () => {
+    if (FORCE === 'cleanup') throw new Error('forced failure in cleanup (PWP_LIFECYCLE_FORCE=cleanup)');
     await finishTest('lifecycle');
     fs.rmSync(PROJ, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
     process.exit(0);
   })
   .catch(async (error) => {
     const status = await gateStatus().catch(() => null);
+    const probeText = probeReport();
     await finishTest('lifecycle').catch(() => {});
+    const report = failureReport(error, status, probeText);
+    const file = path.join(PROJ, 'failure.txt');
+    try {
+      fs.writeFileSync(file, report);
+    } catch (writeError) {
+      console.error(`could not write ${file}: ${writeError.message}`);
+    }
     console.error(`lifecycle: FAILED: ${error.message}`);
-    console.error(`probes:\n${probeReport()}`);
-    console.error(`gate status: ${JSON.stringify(status)}`);
+    console.error(report);
+    console.error(`failure file: ${file}`);
     console.error(`project kept for inspection: ${PROJ}`);
     process.exit(1);
   });
