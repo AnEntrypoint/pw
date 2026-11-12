@@ -89,7 +89,7 @@ const logTail = (file) => {
   }
 };
 const log = (line) => fs.appendFileSync(GATE_LOG, `${new Date().toISOString()} ${line}\n`);
-const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, ...options });
+const playwriterSpawn = (args, options = {}) => spawn(process.execPath, [PLAYWRITER_BIN, ...args], { cwd: PROJECT, windowsHide: true, ...options });
 
 function httpGet(port, urlPath, timeout = 3000) {
   return new Promise((resolve) => {
@@ -283,7 +283,7 @@ function resolveFromConfig() {
   const url = pathToFileURL(path.join(PLAYWRITER_DIR, 'dist', 'browser-config.js')).href;
   const script = "import(process.argv[1]).then((config) => process.stdout.write(config.resolveBrowserExecutablePath()), (error) => { process.stderr.write(error.message); process.exit(1); });";
   return new Promise((resolve, reject) => {
-    execFile(process.execPath, ['-e', script, url], { env: process.env, encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(process.execPath, ['-e', script, url], { env: process.env, encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
       if (error) return reject(new Error((stderr || error.message).trim()));
       resolve(stdout.trim());
     });
@@ -723,6 +723,7 @@ async function ensureGate(port) {
   const gate = spawn(process.execPath, [__filename, '--gate'], {
     cwd: PROJECT,
     detached: true,
+    windowsHide: true,
     stdio: ['ignore', out, out],
     env: { ...process.env, PLAYWRITER_PROJECT_DIR: PROJECT },
   });
