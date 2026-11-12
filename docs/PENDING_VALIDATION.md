@@ -243,3 +243,41 @@ Lifecycle failure report (977174c, Phase A; Phase B on 12a74ad):
 ## gm run b8bdb4: steps after the Phase A record (step 4, continued)
 
 - 22:03 to 22:20 UTC (actionSeq 2716 to 2763): Phase A commit 4798aa1; job pb-foreign1 (stale-foreign alone, 3368 ms); job pb-foreign-final (foreign rerun alone, 3366 ms; full set, 541507 ms); this docs commit and the push. The run is not finished and its task is unchanged.
+
+## Item 4: the cause of gate 2531’s disappearance (read-only evidence)
+
+Status: open. The code shows how a pre-fix check could reach a foreign gate. The logs read here record no kill of pid 2531 and no check run in the window, so the cause is not settled.
+
+Sources. gm’s code was read with `gh api repos/AnEntrypoint/gm/contents/<path>?ref=<sha>`, which returns the same blob as `git show <sha>:<path>`. gm’s checkout was not touched and nothing was run. Paths are under native/components/tool/checks/: 73ccd2c is the pre-fix commit and be9909f the fix.
+
+What the pre-fix code does (73ccd2c):
+- lazy_browser.cpp:64-66 takes every `gate pid N` or `browser running pid N` from the reply of the check’s first browser call, with no check of which project owns the gate.
+- lazy_browser.cpp:70-73: roots are the session’s descendants, plus those reported pids, plus every process whose command line contains the sandbox path (`processes_mentioning(sandbox.string())`); `tree = process_tree(roots)`.
+- lazy_browser.cpp:76: `kill_processes(tree);`
+- process_tree.cpp:31-46 (identical at both commits): `process_tree` returns every descendant of the roots, by parent pid. process_tree.cpp:51-52: `kill_processes` sends SIGKILL to each pid, with no start-time check. process_tree.cpp:55-65: `processes_mentioning` matches a substring of /proc/<pid>/cmdline only.
+- browser_first_open.cpp:194-196: the gate pid is parsed from the launcher status output and `::kill(static_cast<pid_t>(gate_pid), SIGKILL);` is called, with no identity check.
+- browser_first_open.cpp:244-250: sandbox-path roots, `process_tree(live)`, `kill_processes(tree)`.
+- browser_scope.cpp:257-263: roots are the session’s descendants plus `processes_mentioning(home.string())`; `tree = process_tree(roots)`; `kill_processes(tree)` at line 263.
+
+What the fix changes (be9909f):
+- lazy_browser.cpp:81 takes a snapshot `before` just before the first call. Lines 49-52 (`fresh`) count a pid as fresh if it is absent from that snapshot or its start time changed. Lines 96-99 keep a pid only if it is a session descendant or fresh, and store its start time. Lines 104-107 kill a pid only if its start time still matches. This is an identity check. Its gap: a process started after the snapshot whose command line matches the sandbox path counts as fresh.
+- browser_first_open.cpp:84-91 adds `Owned` and `still_ours`, which compare start times. Lines 235-237: the gate pid comes from the status output, and `own()` reads its start time at the moment it is parsed, so the comparison cannot tell a reused pid from the gate that was reported. Lines 285-291: every sandbox-path match gets its start time when scanned, so `still_ours` holds for it by construction, and its tree is still killed.
+- browser_scope.cpp is unchanged apart from the message on line 247. Lines 257-263 still kill `processes_mentioning(home)` trees with no identity check. The commit message (“check kills by pid and start time”) does not cover this file.
+- reap_identity.cpp (new, 126 lines) is a witness for the ledger reaper. It is not a check.
+
+What the logs show. Read-only search of /workspace/{gm,pw,fx,index,sa,hyperagent}/runs and /tmp, for `2531` as a whole word, for the timestamps 17:56 and 19:56, and for `gate pid N` text.
+- Pid 2531 was a playwriter gate: `node /data/cache/npm/_npx/bc63b05df76aa536/node_modules/pw/bin/playwriter-project --gate`. That npx package is the one gm’s live gate pid 1180507 runs (cwd /workspace/gm).
+  - /workspace/pw/runs/2026-11-12-17-33-04-e70f7d/log.jsonl line 100 (result at 2026-11-12T17:37:51.763Z), from `ps -eo pid,etime,args`: `   2531    01:28:29 /data/cache/node/node-v24.22.0-linux-x64/bin/node /data/cache/npm/_npx/...`. An elapsed time of 01:28:29 puts its start at about 16:09Z.
+  - /workspace/pw/runs/2026-11-12-17-41-34-6daa36/outputs/d0f98db0831d-run_shell.txt line 79, written 17:47:50Z, and 5fa63f70c88b5d01-run_shell.txt line 79, written 17:53:01Z, from `ps -eo pid,args`: `   2531 /data/cache/node/node-v24.22.0-linux-x64/bin/node /data/cache/npm/_npx/bc63b05df76aa536/node_modules/pw/bin/playwriter-project --gate`.
+- The record’s disappearance time is 19:56:12 (docs line 97), with no zone. The same paragraph writes “22:08 local”, and line 98 writes “UTC” in full. If 19:56:12 is local (UTC+2), it is 17:56:12Z, three minutes after the last listing. This is an inference.
+- No hit: no file contains `check-lazy-browser`, `check-browser-first-open` or `check-browser-scope`; no file contains a 17:56 or 19:56 timestamp; no gm-first-open sandbox exists in /tmp now.
+- `gate pid N` text is in 37 gm run logs (dated 2026-11-04 to 2026-11-10 and two older run ids), but none of them names pid 2531.
+- Other `2531` hits are not gate evidence: sequence numbers (`"seq":2531`) in gm, fx and sa logs; index compact job outputs (`2531/5777`); fixtures in /tmp (`filler-02531`, minified JavaScript); and quotes of this record in pw run outputs.
+- The record cites a watcher that showed a kill wave at 19:56:05.283Z (docs line 96) and says no watcher ran at 2531’s time (line 97). No file under the paths searched holds that watcher output, so the 05.283Z reading is unverified here.
+- Launcher text, pw repo at HEAD (the installed pin may differ, not checked): lib/browsers.js:186 prints `gate pid ${browser.gate.pid} for ${browser.project}` for any project’s gate. A browsers list is machine-wide, so a check that reads `gate pid N` from a reply can take another project’s gate pid.
+
+Conclusion for item 4: open.
+- The evidence proves: pid 2531 was a live playwriter gate at 17:53:01Z at the latest. The pre-fix check code SIGKILLs every descendant of a process whose command line contains the sandbox path, and of any pid that the first call’s reply names as a gate, so a foreign gate was within its reach. be9909f narrows two of the three paths. browser_scope.cpp still has the unconditional kill.
+- The evidence does not prove that any gm check killed pid 2531. No file records a check run, a kill or a gate exit between 17:53:01Z and the absence the record reports. SIGKILL leaves no record in these files. The owner of pid 2531, its project directory, is not in any file read. The zone of 19:56:12 is an inference, and the watcher quoted in line 96 is not in the paths searched.
+- The item 10 Phase B result (gate 2531 not present in my runs) says nothing about the earlier disappearance. “Not present at any point” there refers to my runs only.
+- What would settle it: a log line naming pid 2531 with a time between 17:53:01Z and the absence, a kill record for that pid, or gm’s worker log for that window. None exists in the paths read. A reproduction of the pre-fix path under a process watcher would show whether it kills a foreign gate, but it is a Phase B step that this stretch does not run.
