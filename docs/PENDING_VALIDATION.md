@@ -382,3 +382,18 @@ Status: open. The cause of gate 2531's disappearance is not established.
 3. Item 4: the remaining kill path (`browser_scope.cpp`) is in gm's repo, not pw's.
 
 Blocked on the owner, not ranked: item 3, the sandboxed launch (needs the owner's host sandbox setting); the `--no-sandbox` fallback (stays off; item 2, the owner decides); F1 and the upstream send (`docs/UPSTREAM_PLAYWRITER.md` needs the owner's repro, and nothing is sent); deleting `/tmp/pw-test-*` (item 7, needs proof of ownership). Not recoverable: the reason for the revert 001cf63 (item 5) is in no record.
+
+## Load witness for the request-path change (36846ac): 20 runs, no restart after a miss
+
+Setup: 12 busy loops (`sh -c 'while :; do :; done'`), started by me under `timeout 1800`, pids 1645441 to 1645452, each stopped by its own pid in an EXIT trap (kill, then wait). The loop ran `test/callprobe.cjs` then `test/lifecycle.cjs`, ten times each, each node pid under `timeout 400`, stopping at the first failure. No run failed, so no directory was kept. The gate logs were copied before each test deleted its project directory, by a preload hook kept outside the repo (`node -r hook.cjs`, which copies `.playwriter/gate.log` and `browser.log` when `fs.rmSync` is called on a `pw-test-*` or `pw-callprobe-*` directory). logdir /tmp/tmp.BGUVFWobZB, tree 36846ac, gm job pb-loadwitness1. Load average before the loop 4.30 3.73 3.98; nproc 12.
+
+- Exit codes and walls (ms): callprobe 1 to 10 exit 0 each, walls 20636, 20920, 18338, 16097, 21558, 17397, 17697, 16301, 22475, 22388. lifecycle 1 to 10 exit 0 each, walls 54299, 49911, 48913, 53046, 54051, 50077, 50942, 50567, 66695, 61373. Sum of all walls 733681 ms.
+- Load level: 1-minute load average after each run ran from 3.28 (the first run, still rising) to 34.74 (callprobe 10). Both loops were on 12 cores under the 12 busy loops.
+- Restarts from the gate logs: "went away" 0 and "stopped answering" 0 in all 20 runs. No gate restart followed a missed probe.
+- callprobe (10 runs): one `probe failed 1/3: timeout after 3000 ms` per run. That is the request miss the witness injects with SIGSTOP. Each run then answered and kept its browser: one `browser started` per run. Run 7 has a second line, `probe failed 2/3: timeout after 3000 ms`, 0.25 s after the first. The log does not say which path wrote it. The timing fits a tick probe (the tick starts 5 s after gate start, and the second probe began at 26.6 s, the request probe at 26.35 s), so run 7 had one request miss and one tick miss, both below 3 and reset by the next answer.
+- lifecycle (10 runs): no `probe failed` line in any run, so no miss happened organically under load. Each run shows three `browser started` and three `gate on` lines. They come from the test's own steps: the browsers tool closes the browser, the gate exits after its grace period, the next CLI session starts a gate, the idle stop, then the reopen. None followed a miss.
+- Request-path misses in these runs: 10 injected, one per callprobe run. Each was answered at the next probe, and none led to a restart. No restart after a single miss on a live browser was found.
+
+Conclusion: no defect in 36846ac under this load, so no fix, no Phase A change, and no push. Item 1 and item 4 stay open.
+
+Limits: the lifecycle runs produced no organic miss under this load, so the miss path under load was exercised only by callprobe's injected 3.5 s stop. The gate log writes a request miss and a tick miss with the same text, so attribution is by the witness's own timing.
