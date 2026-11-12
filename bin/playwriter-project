@@ -40,6 +40,7 @@ const CHROME_TRIMS = [
 ];
 const IDLE_CHECK_MS = 2000;
 const GONE_AFTER_PROBES = 3;
+const PROBE_RETRY_MS = 1000;
 const CHILD_EXIT_MS = 1500;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
 const INIT_ID = 'pwp-init';
@@ -503,14 +504,7 @@ function runGate({ gate, debug }) {
 
   const ensureChrome = async () => {
     if (stopping) await stopping;
-    if (chromeUp && await probe()) return;
-    if (chromeUp) {
-      chromeUp = false;
-      browser = null;
-      missedProbes = 0;
-      dropSockets();
-      log('browser stopped answering; starting it again');
-    }
+    if (chromeUp && await browserAnswers()) return;
     starting ??= (async () => {
       if (await probe()) await adopt(true);
       else await startChrome();
@@ -753,19 +747,44 @@ function runGate({ gate, debug }) {
     }
   };
 
+  const missedProbe = (reason) => {
+    if (++missedProbes < GONE_AFTER_PROBES) {
+      log(`probe failed ${missedProbes}/${GONE_AFTER_PROBES}: ${reason}`);
+      return false;
+    }
+    chromeUp = false;
+    browser = null;
+    missedProbes = 0;
+    dropSockets();
+    log(`browser went away after ${GONE_AFTER_PROBES} failed probes; last: ${reason}`);
+    return true;
+  };
+  let answering = null;
+  const browserAnswers = () => {
+    answering ??= (async () => {
+      while (chromeUp) {
+        const reason = await probeReason();
+        if (reason === null) {
+          missedProbes = 0;
+          return true;
+        }
+        if (missedProbe(reason)) return false;
+        await sleep(PROBE_RETRY_MS);
+      }
+      return false;
+    })().finally(() => {
+      answering = null;
+    });
+    return answering;
+  };
+
   const tick = async () => {
     if (chromeUp) {
       const reason = await probeReason();
       if (reason === null) {
         missedProbes = 0;
-      } else if (++missedProbes >= GONE_AFTER_PROBES) {
-        chromeUp = false;
-        browser = null;
-        missedProbes = 0;
-        dropSockets();
-        log(`browser went away after ${GONE_AFTER_PROBES} failed probes; last: ${reason}`);
       } else {
-        log(`probe failed ${missedProbes}/${GONE_AFTER_PROBES}: ${reason}`);
+        missedProbe(reason);
       }
     }
     const idle = Date.now() - lastActivity;
