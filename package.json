@@ -8,11 +8,15 @@
   },
   "scripts": {
     "postinstall": "patch-package --error-on-fail",
-    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs",
+    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs && node test/signals.cjs && node test/fallback.cjs && node test/ready.cjs",
     "witness": "node test/memory.cjs",
     "f1": "node test/firstpage.cjs",
     "orphan": "node test/orphan.cjs",
-    "mode": "node test/mode.cjs"
+    "mode": "node test/mode.cjs",
+    "signals": "node test/signals.cjs",
+    "fallback": "node test/fallback.cjs",
+    "ready": "node test/ready.cjs",
+    "phase-b": "node test/phase-b.cjs"
   },
   "engines": {
     "node": ">=22"
