@@ -191,3 +191,10 @@ Lifecycle probe reasons (cfbadf1): the open cause, the failed debug-port probe, 
   - /tmp/pw-test-start is a regular file, 11 bytes, containing 1794499805 (16:10:05Z in epoch seconds). It is not a directory and has no gate or browser data, so it is not evidence.
   - Other /tmp/pw-* entries were listed but not opened, because they are not lifecycle directories.
 - Conclusion: neither kept directory shows the held-lease assertion failing. The cause of the one failed probe in the 19:25:34Z run stays open.
+
+Lifecycle failure report (977174c, Phase A; Phase B pending):
+
+- Change: every failure of test/lifecycle.cjs, on any check or in cleanup, writes failure.txt into the kept directory and prints the same text to stderr. The file holds the failure message, the failing line taken from the stack, the checks passed before the failure, the stack, the probe reasons, the gate status (read before finishTest stops the gate), and the last 20 lines of gate.log and browser.log (read after it). The directory is kept on every failure path, as before.
+- Forced failures, selected by PWP_LIFECYCLE_FORCE: check11 fails the assertion before check 11 (the cookie check after the CLI reconnect), and cleanup throws at the start of the cleanup step.
+- Witness: test/lifecycle-forced.cjs (npm run lifecycle-forced-check11 and lifecycle-forced-cleanup). Each run must exit 1, name its message on stderr, and leave failure.txt with the message, the failing line equal to the marker line in lifecycle.cjs, the stack, the gate status and the browser log tail. Each witness keeps its directory, so the kept directories can be read.
+- Phase B for this change, the plain lifecycle run and the two forced runs, is recorded below.
