@@ -529,8 +529,9 @@ function runGate({ gate, debug }) {
 
   const isHeld = async () => {
     if (!chromeUp || !(await probe())) return false;
-    if (Date.now() < holdUntil) return true;
-    return ((await httpJson(debug, '/json/list', 3000)) ?? []).some(isCallerPage);
+    const open = ((await httpJson(debug, '/json/list', 3000)) ?? []).some(isCallerPage);
+    if (open) holdUntil = 0;
+    return open || Date.now() < holdUntil;
   };
 
   const releaseBrowser = async (reason) => {
