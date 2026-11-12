@@ -16,6 +16,7 @@ try {
   process.exit(1);
 }
 const PLAYWRITER_BIN = path.join(PLAYWRITER_DIR, 'bin.js');
+const CDP_CONTEXTS = pathToFileURL(path.join(__dirname, '..', 'lib', 'cdp-contexts.mjs')).href;
 
 const HOST = '127.0.0.1';
 const IDLE_MS = Number(process.env.PLAYWRITER_IDLE_MS) || 300000;
@@ -1033,7 +1034,8 @@ function proxyMcp(ports, direct) {
 
   const ensureChild = () => {
     if (child) return child;
-    const started = playwriterSpawn([], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, PLAYWRITER_DIRECT: direct } });
+    const nodeOptions = [process.env.NODE_OPTIONS, `--import=${CDP_CONTEXTS}`].filter(Boolean).join(' ');
+    const started = playwriterSpawn([], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, PLAYWRITER_DIRECT: direct, NODE_OPTIONS: nodeOptions } });
     child = started;
     started.stdin.on('error', () => {});
     started.on('error', (error) => {
