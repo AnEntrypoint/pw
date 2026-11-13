@@ -521,3 +521,63 @@ Full set once on df54652 (logdir /tmp/tmp.3FlKSVyytg): runner exit 0, wall 73075
 Host and peers during the full set: 28 busy-loop processes from other sessions were sampled at 01:15:08 to 01:16:38, 01:18:09 to 01:18:24, 01:18:39 to 01:20:55, and 01:26:56 to the end. The owner's note names gm's loops and fx's Phase B job; I did not check their owners myself. Host load ranged from 3.90 to 23.84 across the samples. None of these processes was started or stopped by this work.
 
 Longest step: the full-set runner, 730753 ms. Its longest row was npm-test, 278993 ms.
+
+## Gate and executor stretch: a live browser is kept, the start failure names the log, ensureConnection checks isConnected in both modes (713ee76, 5ab83c6, 204f2dc; Phase A, then Phase B)
+
+Change (a), 713ee76, `bin/playwriter-project`: at the third missed probe the gate checks whether the browser pid is alive, or whether the profile lock holder is. A live browser is kept: no socket drop, no forgetting, and the request takes the existing deferred-start path, which waits for the same browser rather than spawning another. Only a dead pid drops the executor sockets and forgets Chrome.
+
+Witness (a): `test/live-browser.cjs`, `npm run live-browser`. It holds a lease, stops the browser for 15 s, makes a request through the gate port during the stop, then checks at least three miss lines, no `went away` line, the answer, the same pid, and one `browser started`. It then SIGKILLs the browser by pid and checks that the gate logs `went away ... pid N is dead`, answers the next request, and starts a new pid.
+
+Red control (a) on the launcher of 11e1517, before this stretch: the gate logged `probe failed 1/3` and `2/3`, then `browser went away after 3 failed probes; last: timeout after 3000 ms` for pid 2179403, which was still alive. The witness failed with `1 !== 0`. Repeated under twelve busy loops of mine (PIDs 2204426 to 2204437, all stopped by PID, 0 alive after; host load 2.26 before, 7.15 after; 12 busy-loop processes, all mine, so the peers' 28 had finished): the same failure, exit 1, 25547 ms.
+
+Green (a) on 713ee76: `browser pid 2185576 kept through 4 missed probe lines; the request made during the stop was answered`, then `browser pid 2185576 killed; the gate forgot it and started pid 2186782`, then `live-browser: all checks passed`. Also green on 713ee76: `npm run callprobe` (one miss logged as `probe failed 1/3`, no restart, request answered), `npm run orphan` (both rows), `npm run negative-control`, and `node test/lifecycle.cjs` (`lifecycle: 12 checks passed`).
+
+Change (c), 5ab83c6, `bin/playwriter-project` and `test/start.cjs`: the failing start's output now names the gate log, `playwriter-project: browser failed: <reason>; gate log <path>`. The gate log was already kept: the launcher appends to it and never removes it, so the log itself did not change.
+
+Witness (c): `test/start.cjs` asserts that the failure output contains the gate log path. Red on the unchanged launcher: `start: FAILED: refusal: the failure output names the gate log /tmp/pw-start-refusal-f12Hv4/.playwriter/gate.log`. Green after: `ok refusal: start returns in 665 ms with the gate's reason; the browser is started once`, `ok exit: start returns in 879 ms with the gate's reason; the browser is started once`, `start: all checks passed`.
+
+Change (b), 204f2dc, `patches/playwriter+0.9.0.patch` (the executor in `node_modules/playwriter`, both `dist/executor.js` and `src/executor.ts`): `ensureConnection` checks `this.browser?.isConnected() ?? false` in both modes, not only headless.
+
+Witness (b): `test/executor.cjs direct` and `test/executor.cjs headless`. The direct row starts Chrome, connects the executor, kills the browser by the pid that owns its debug port (after checking that pid's profile in `/proc`), and calls `ensureConnection`. The headless row closes the browser and calls `ensureConnection`, then opens a page on the replacement.
+
+Finding (b): the stated reason did not reproduce. On the executor before the change, a killed browser already reports `isConnected()` false, the `disconnected` handler clears the executor's state, and the direct path reconnects and fails with `ECONNREFUSED 127.0.0.1`. Before and after the change the direct row reads `browser pid N killed; isConnected reported false: true; ensureConnection threw: ... ECONNREFUSED`, and the headless row returns a connected replacement that opens a page. So (b) makes the check uniform across modes, as asked, but no witness shows it changes behaviour for a killed browser. A frozen browser is not dead, and it was not tested as a case for (b).
+
+Patch: `patch-package` cannot run offline here (it reinstalls playwriter@0.9.0), so the patch was built with `git diff` from the pristine files, which were recovered by reversing the old patch. The new patch applies to a pristine copy and reproduces the edited files byte for byte. `test/patch.cjs` still passes.
+
+## Stretch decisions: (b) dropped by revert, the leaked Chromium, the give-up witness, gm's log, and the hosted lifecycle failure
+
+Change (b) is dropped. `b5d293c` reverts `204f2dc` as a new commit, so the history keeps it. The reason: the stated reason did not reproduce. The executor witness was green before and after the change in both modes. On the unpatched executor a killed browser already reports `isConnected()` false (the `disconnected` handler clears the executor's state), so the direct path reconnects and throws `ECONNREFUSED`, and the change made no observable difference. `node_modules` was restored to the reverted patch and matches it byte for byte. The executor witness stays as a witness with no executor change (`test/executor.cjs`, in `ee4d3d7`).
+
+The leaked Chromium pid 2165696 (cwd `/workspace/pw`, ppid 1, started 01:32:50Z, with crashpad handlers 2165734 and 2165739) is not a gate give-up. Its command line has `--user-data-dir=/tmp/pw-executor-direct-UM8wYd`, the profile of my first executor-direct attempt, which killed the `chrome` wrapper shell rather than Chromium, so the real browser was orphaned. I confirmed ownership and stopped it and its crashpad handlers by PID, with its renderers (nine processes). The current executor witness kills the listener pid in its `finally`, so it no longer leaves one.
+
+The give-up path. A give-up now happens only when the browser pid is dead and no profile owner is alive. Probe on `b5d293c`: a SIGKILLed browser was logged as `browser went away after 3 failed probes; pid 2258323 is dead` by the tick, and no process under its profile remained 25 s later (0 of 8 before and after). So no stop code is needed on that path. The surviving-browser give-up existed only before this stretch, when the gate gave up on a live browser. The new witness `test/giveup.cjs` covers that: a browser that survives a give-up fails it. Red on the pre-stretch launcher `11e1517`: `giveup: FAILED: a browser survived a give-up: pid 2272404 is alive after the gate gave up`. Green on `ee4d3d7`: `giveup: ok: 0 give-up(s) during the stop; the browser pid 2274259 is alive and kept`, then `giveup: all checks passed`.
+
+gm's gate log (`/tmp/gm-browser-scope-34136692712431/ws/.playwriter/gate.log`, read only; gm's sandbox was not touched): at 01:35:37.621Z `probe failed 1/3`, at 01:35:40.569Z `browser stopped answering; starting it again`, at 01:35:41.604Z a new browser pid 2180897. The gate gave up after one logged miss. This is the restart-on-one-miss behaviour the red control reproduces (on `11e1517`, `browser went away` for the live pid 2179403).
+
+Hosted windows-scan for `33006d8` (run 43342269597, read once): the failing check was `Lifecycle tests`, `lifecycle: FAILED: the debug port stops answering after the close`, after 5 checks passed. The debug-port probe answered 52 times after the close (`ok x52`), so the browser was still up and answering on the Windows runner after the close. The log does not show why the close did not stop it. This stretch does not change that path (`stopChrome` and the close are unchanged, and the run predates the stretch).
+
+Leftovers: pid 2234375 (a gate in `/tmp/pb13/id-proj`, started 01:47:39Z, from my diagnostic run) and the foreign-profile browser from the same run (`/tmp/pb13/foreign-profile`) had already exited when I came to stop them. I stopped nothing for them.
+
+gm run tools: the active gm run is `2026-11-12-17-54-18-b8bdb4`, another task. `next_context` returned it unchanged, and I did not start a new run for this stretch, so this stretch used Bash for git and tests.
+
+## Phase B on ee4d3d7 (the final tree of this stretch): green
+
+Tree: `713ee76` (a: a live browser is kept through missed probes), `5ab83c6` (c: the start failure names the gate log), `204f2dc` and its revert `b5d293c` (b dropped), `ee4d3d7` (the executor witness with no executor change, and the give-up witness). Build: `node --check` passed for `bin/playwriter-project` and all 25 `test/` and `scripts/` files. pw has no build step.
+
+Red controls. Each time the pre-stretch launcher from `11e1517` was swapped into `bin/`, the run was made, and HEAD was restored (`changed in bin: 0`):
+- `test/live-browser.cjs`, alone: exit 1, the gate forgot the live pid 2179403 after its probes missed (`1 !== 0`, one `went away` line).
+- `test/live-browser.cjs`, under twelve busy loops (PIDs 2204426 to 2204437, stopped by PID, 0 alive after): exit 1, 25547 ms, the same failure. Host load 2.26 before, 7.15 after; 12 busy-loop processes, all mine.
+- `test/giveup.cjs`, alone: exit 1, `a browser survived a give-up: pid 2272404 is alive after the gate gave up`.
+- `test/start.cjs` on the unchanged launcher, for (c): exit 1, `the failure output names the gate log`.
+- The executor witness for (b), before the change: green (see the decisions section). (b) is dropped, so there is no red for it to answer.
+
+Green on `ee4d3d7`, loaded: each of three reps ran lifecycle, leases, executor-direct and executor-headless under twelve busy loops of mine, stopped by PID after each rep (0 alive every time). All twelve rows exited 0:
+- lifecycle: 63054 ms, 62259 ms, 61203 ms.
+- leases: 85300 ms, 83456 ms, 82572 ms.
+- executor-direct: 2184 ms, 2041 ms, 1915 ms.
+- executor-headless: 2648 ms, 3014 ms, 2502 ms.
+Host 1-minute load across the loaded rows ranged from 9.82 to 17.92; the busy-loop count was 12 every time, so no peer loops were running in those rows. Log: `/tmp/pwb-stretch-loaded-final.log`, logdir `/tmp/pwb-stretch-loaded-wiDzu7`.
+
+Green on `ee4d3d7`, full set once (logdir `/tmp/tmp.jAyyZHl3Lt`, samples `/tmp/pwb-stretch-fullset-final.samples`): runner exit 0, wall 764558 ms, worst exit 0, leftover 0 on every row, 22 of 22 rows exit 0. Row walls in ms: npm-test 295173, f1 7838, orphan 30613, mode 5009, memory 96385, phase-b 17729, start-refusal 6289, signal 1704, stale-replace 5729, stale-held 7127, stale-unanswering 18570, stale-nosandbox 29221, lifecycle-nosandbox 56765, lifecycle-forced-check11 44571, lifecycle-forced-cleanup 55548, stale-foreign 3465, callprobe 14318, negative-control 13881, live-browser 25873, executor-direct 1184, executor-headless 1386, giveup 25646. Host during the full set: busy-loop processes 0 in all 51 samples (no peer loops); 1-minute load from 1.36 to 13.85.
+
+Longest step: the full-set runner, 764558 ms (about 12.7 minutes). Its longest row was npm-test, 295173 ms.
