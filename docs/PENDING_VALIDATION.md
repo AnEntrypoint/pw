@@ -437,4 +437,22 @@ Changes, each one a local commit as lanmower with no trailers; nothing pushed:
 
 Outside this change: `test/orphan.cjs` (`answering` after exit, one `/json/version` fetch with a 2 s timeout) and the answer helpers in `test/leases.cjs`, `test/fallback.cjs`, `test/ready.cjs` and `test/stale.cjs` are single-probe checks, but they are not lifecycle runs, so they are left for a separate pass. The `npm test` chain runs `test/lifecycle.cjs` and the control, so it picks up both changes.
 
-Phase B: pending. Phase A ran no build, test, gate or witness. Phase B will run the syntax check, `test/patch.cjs`, the lifecycle witness three times under 12 busy loops, the red control under the same loads, the full set once, and one push only if green. Each witness's wall time goes here when it runs.
+Phase B: see the two sections below. Phase A ran no build, test, gate or witness.
+
+## Probe refusals in the loaded lifecycle runs (efb8979 and 9fbe76a): no refusal on a live gate
+
+The three lifecycle runs under 12 busy loops (logs in /tmp/pwb-neg-ORRLni) each ended with `gate /__pwp/ping` refused 9 times (ok 16, 23 and 14) and `debug-port /json/version` refused 15 times (ok 3). No refusal was on a live gate.
+
+The counts follow from the checks. A `confirmedGone` decision sends three probes one second apart and returns true only when all three are refused. The test makes eight such decisions per run, and 8 × 3 = 24 = 9 + 15:
+
+- Start, before the first call: gate 3, debug 3. The launcher claims `port` and `debug-port` as soon as the MCP wrapper starts (`loadPorts` in `main` and `proxyMcp`, through `claimPort`), so both files exist and point at nothing. No gate had started yet; the first `gate on` line is at 00:19:04.310 in run 1, after the start checks.
+- Browsers close: debug 3. The browser stopped at 00:19:16.361 in run 1.
+- Disconnect: gate 3, debug 3. The gate logged `gate exiting: no lease for the grace period` at 00:19:21.472 (run 1), 00:20:31.889 (run 2) and 00:21:48.159 (run 3). The browser had already stopped in the close step.
+- CLI session idle: debug 3. `browser stopped` at 00:19:34.107 in run 1.
+- Final stop: gate 3, debug 3. The gate had been gone since 00:19:47.367 and the browser since 00:19:47.111 in run 1, so the first iteration confirmed both.
+
+Every refusal came after the stop that the test expected, and the logs fix that stop time for each step. Two counts rule out a refusal inside a positive step: the refusals add up to exactly the 24 from the eight decisions, so no `until(chromeUp)` or reuse step saw one before its success. The ok probes come from the disconnect wait (gate, while the gate was still up) and the three positive `until(chromeUp)` steps (debug).
+
+Cause: the probe is not a defect. The refusals are the expected absence in the new negatives, and the count grows with the number of negative steps, not with failures. The gate logs show 0 `probe failed` lines in all three runs, so no gate probe failed in the gate's own tick either.
+
+Limit: the probe report has no timestamps. The one-to-one match between the logged stop times and the refusal counts is the evidence, not a per-probe timestamp.
