@@ -628,7 +628,8 @@ function runGate({ gate, debug }) {
     if (others.length && params.get('force') !== '1') return { closed: false, pid: browser.pid, reason: `${others.length} other lease(s) held`, leases: others };
     const { pid } = browser;
     await stopChrome('closed by the browsers tool');
-    return { closed: true, pid };
+    if (await waitFor(async () => !(await probe()), 5000)) return { closed: true, pid };
+    return { closed: false, pid, reason: `browser pid ${pid} still answers on port ${debug} after the stop` };
   };
 
   const proxyHttp = (req, res) => {
