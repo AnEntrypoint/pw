@@ -397,3 +397,18 @@ Setup: 12 busy loops (`sh -c 'while :; do :; done'`), started by me under `timeo
 Conclusion: no defect in 36846ac under this load, so no fix, no Phase A change, and no push. Item 1 and item 4 stay open.
 
 Limits: the lifecycle runs produced no organic miss under this load, so the miss path under load was exercised only by callprobe's injected 3.5 s stop. The gate log writes a request miss and a tick miss with the same text, so attribution is by the witness's own timing.
+
+## Remaining pw work, ranked from the backlog (36846ac, 70eac54)
+
+Ranked: every remaining item that needs neither the owner nor gm's repo, from this file, the README, DESIGN.md and docs/.
+
+1. Phase A d65edca, Phase B in the next section: the foreign-gate witness (`test/stale.cjs foreign`) joins the default stale run, so `npm test` covers it. This file kept it out until gm's kill-scope fix landed. `be9909f` is on origin/main, so that reason no longer applies. The witness only spawns and signals its own stub in its own temp directory, so it checks pw's identity check, not gm's kill path (see item 4 below).
+2. Lifecycle negatives are single probes at two places: the `gateUp()` and `chromeUp()` checks after `sleep(1500)` at the start, and the final `gateUp()` after its `until`. Under load one probe can time out on a live gate, and then the check passes falsely. Hardening needs a design (a negative held over a window), so it is not started.
+3. Item 1, the 19:25:34Z probe failure: open. Not reproduced in 10 quiet runs, 10 loaded lifecycle runs on f54098c, and 10 lifecycle plus 10 callprobe runs on 36846ac. The probe reasons and `failure.txt` are in place. This only moves on a recurrence.
+4. The shared-gate `execute` reply race from gm's follow-up task (runs/2026-11-11-18-32-18-2ed982): dd77686 added the raw reply when an execute call has no text. No failure has been seen since, and nothing here shows the race still happens, so there is nothing to fix.
+
+Blocked on the host, not reachable here: the Windows browser scan and the browsers tool (README: not covered; the Windows CI passed at 47317fa, before this series). The macOS scan (`ps`) has never been tested. Item 5's page-target wait would reopen only on a counter-measurement from another host.
+
+Excluded, owner or gm: item 3 (sandboxed launch, needs the owner's host sandbox setting); the automatic `--no-sandbox` fallback (item 2, stays off); F1 and the upstream send (`docs/UPSTREAM_PLAYWRITER.md`, needs the owner's repro); deleting `/tmp/pw-test-*` (item 7); item 4's kill path in `browser_scope.cpp` (gm's repo); the consumer pin in `docs/CONSUMERS.md` (243db69, 68 commits behind at 36846ac; gm's `defaults/mcp.json` takes that pin, so the re-pin is gm's and the owner's).
+
+Phase A, d65edca: `test/stale.cjs` `DEFAULT_MODES` gains `foreign`, and the line that said foreign is not run by default is removed. Witness: the default `node test/stale.cjs` runs four modes, and `npm test` runs it.
