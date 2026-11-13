@@ -207,9 +207,8 @@ const failureReport = (error, gateText, probeText) => [
   check('browsers close stops the project browser when no other lease is held');
 
   m.close();
-  await until(async () => !(await gateUp()), IDLE_MS + 30000);
-  assert.equal(await gateUp(), false);
-  assert.equal(await until(async () => !(await chromeUp()), 10000), true, 'the browser stays closed once the agent disconnects');
+  assert.equal(await until(() => confirmedGone(gateUp), IDLE_MS + 30000), true, 'the gate exits once the agent disconnects');
+  assert.equal(await until(() => confirmedGone(chromeUp), 10000), true, 'the browser stays closed once the agent disconnects');
   check('gate exits and the browser stays closed once the agent disconnects');
 
   const session = cli(['session']);
