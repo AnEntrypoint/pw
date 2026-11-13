@@ -274,6 +274,9 @@ function pidAlive(pid) {
 function commandOf(pid) {
   if (process.platform === 'linux') return readRaw(`/proc/${pid}/cmdline`)?.replaceAll('\0', ' ') ?? '';
   try {
+    if (process.platform === 'win32') {
+      return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 });
+    }
     return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   } catch {
     return '';
