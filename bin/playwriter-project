@@ -42,6 +42,7 @@ const IDLE_CHECK_MS = 2000;
 const GONE_AFTER_PROBES = 3;
 const PROBE_RETRY_MS = 1000;
 const CHILD_EXIT_MS = 1500;
+const START_DEADLINE_MS = 60000;
 const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-length'];
 const INIT_ID = 'pwp-init';
 const MCP_TOOLS = require('../lib/mcp-tools.json');
@@ -1213,18 +1214,11 @@ async function main(argv) {
 
   if (argv[0] === 'start') {
     const from = fs.existsSync(GATE_LOG) ? fs.statSync(GATE_LOG).size : 0;
-    let outcome = null;
-    const until = Date.now() + 60000;
-    while (outcome === null && Date.now() < until) {
-      if (await httpOk(ports.gate, '/json/version', 2000)) {
-        outcome = { ready: true };
-      } else {
-        const reason = gateFailureSince(from);
-        if (reason !== null) outcome = { ready: false, reason };
-        else await sleep(200);
-      }
-    }
-    outcome ??= { ready: false, reason: `no answer on port ${ports.gate} within 60 s` };
+    const answer = await httpGet(ports.gate, '/json/version', START_DEADLINE_MS);
+    const timedOut = answer.error?.startsWith('timeout') === true;
+    const outcome = answer.status === 200
+      ? { ready: true }
+      : { ready: false, reason: gateFailureSince(from) ?? (timedOut ? `no answer on port ${ports.gate} within ${START_DEADLINE_MS / 1000} s` : answer.error ?? `HTTP ${answer.status}`) };
     console.error(outcome.ready ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed: ${outcome.reason}`);
     if (outcome.ready) await httpGet(ports.gate, `/__pwp/hold?ms=${IDLE_MS}`, 2000);
     lease.destroy();
