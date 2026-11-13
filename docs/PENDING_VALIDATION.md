@@ -679,4 +679,22 @@ Other witnesses this push must carry, because their files changed: `test/lifecyc
 
 Hosted witness for this push: the windows-scan on the new head, its lifecycle line 234 (the sweep) and line 197 (the close). Read once by the dispatcher, not polled.
 
-Approval and reason. The first Phase B push, `d13cede`, broke a listed witness: the Windows lifecycle row, at `test/lifecycle.cjs:234`, through `finishTest` on win32. The dispatcher approves this second push for that fix only. The reason goes in the owner report. The push also carries `20ff80b` (the dispatcher's reading record) and `ac603ae` (the refusal witnesses, not yet run), as set out in the refusals section above.
+Approval and reason. The first Phase B push, `d13cede`, broke a listed witness: the Windows lifecycle row, at `test/lifecycle.cjs:234`, through `finishTest` on win32. The dispatcher approves this second push for that fix only. The reason goes in the owner report. The push also carries `20ff80b` (the dispatcher's reading record) and `ac603ae` (the refusal witnesses, run in Phase B below), as set out in the refusals section above.
+
+## Phase B on 88eee15: the listing fix, the refusal witnesses, the full set (green; one push)
+
+Build: `node --check` passed for `bin/playwriter-project`, `lib/browsers.js`, `test/procs.cjs`, `test/support.cjs`, `test/platform-listing.cjs`, `test/close-noop.cjs`, `test/close-refusals.cjs`, `test/executor.cjs`, `test/giveup.cjs`, `test/phase-b.cjs`, `test/signal.cjs`, `scripts/phase-b.cjs` and `scripts/watch.cjs`.
+
+Witnesses, on 88eee15:
+- `test/platform-listing.cjs`: exit 0. `platform-listing: ok: the win32 listing supplied 1 process row(s) through PowerShell, with no /proc read`, then `platform-listing: all checks passed`.
+- Red control, the listing witness with `test/support.cjs` from `ac603ae` (the old `processTable`) swapped in for one run, then `git checkout -- test/support.cjs`; the tree was clean afterwards. Result: exit 1, `platform-listing: FAILED: ENOENT: no such file or directory, scandir '/proc'`, `/proc reads: scandir /proc`. This is the hosted symptom, on Linux.
+- `test/close-refusals.cjs`, alone (its first run): exit 0, wall 9889 ms. `a close for pid 2435197 was refused; browser pid 2435310 kept: pid 2435197 is not this project's browser, which is pid 2435310`; `a close with another lease held was refused; browser pid 2435310 kept: 1 other lease(s) held`; `close-refusals: all checks passed`. No red control was run: both refusal branches are unchanged since before `dd2fdcd`, so this witness confirms existing behaviour rather than a fix.
+- `test/lifecycle.cjs`, alone on Linux: exit 0, wall 55526 ms, `lifecycle: 12 checks passed`.
+- Full set, once, on 88eee15 (rows `/tmp/pwb-fix2-fullset`, samples `/tmp/pwb-fix2-fullset.samples`, summary `/tmp/pwb-fix2-fullset.summary`): runner exit 0, wall 810844 ms, worst exit 0, 26 of 26 rows exit 0, leftover 0 on every row. Busy-loop processes 0 before and after; load 0.77 before, 1.21 after. Longest row of the run: `npm-test`, 319609 ms (5 min 20 s), which is inside the 810.8 s run. The longest lifecycle row is `lifecycle-forced-cleanup`, 55179 ms; it is not the longest row of the run.
+
+Rows, exit and wall (ms), leftover 0 on every row: npm-test 0 319609; f1 0 7755; orphan 0 30381; mode 0 4800; memory 0 96079; phase-b 0 17732; start-refusal 0 6118; signal 0 1691; stale-replace 0 5641; stale-held 0 6846; stale-unanswering 0 18568; stale-nosandbox 0 28920; lifecycle-nosandbox 0 55121; lifecycle-forced-check11 0 44356; lifecycle-forced-cleanup 0 55179; stale-foreign 0 3468; callprobe 0 14102; negative-control 0 13602; live-browser 0 25713; executor-direct 0 1044; executor-headless 0 1121; giveup 0 25420; close-noop 0 15283; close-refusals 0 10173; platform-listing 0 1630.
+- Process check after the run: the gate pid 2326286 (the npx cache, not mine) and the `playwriter-ws-server` pid 88264 (running since before this stretch, not a row's leftover) were left alone.
+
+Not run here: the Windows lifecycle row. That is the hosted windows-scan for the new head, read once by the dispatcher and not polled.
+
+Push: `88eee15` and the commits below it on `origin/main`, in one fast-forward from `d13cede`: `20ff80b`, `ac603ae`, the listing fix, and this record.
