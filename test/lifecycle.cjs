@@ -222,7 +222,7 @@ const failureReport = (error, gateText, probeText) => [
   check('CLI exec runs in the project browser');
 
   await sleep(IDLE_MS + 4000);
-  assert.equal(await until(async () => !(await chromeUp()), 12000), true, 'the CLI session browser stops after idle');
+  assert.equal(await until(() => confirmedGone(chromeUp), 12000), true, 'the CLI session browser stops after idle');
   check('CLI session browser stops after idle');
 
   const after = cli(['-s', sid, '-e', "return (await context.cookies('http://example.test/')).map((c) => c.name + '=' + c.value)"]);
