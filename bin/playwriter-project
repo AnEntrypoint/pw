@@ -748,16 +748,25 @@ function runGate({ gate, debug }) {
     }
   };
 
+  const browserDead = () => {
+    const pid = browser?.pid;
+    return !(pid && pidAlive(pid)) && liveProfileOwner() === null;
+  };
   const missedProbe = (reason) => {
     if (++missedProbes < GONE_AFTER_PROBES) {
       log(`probe failed ${missedProbes}/${GONE_AFTER_PROBES}: ${reason}`);
       return false;
     }
+    missedProbes = 0;
+    const pid = browser?.pid ?? 'unknown';
+    if (!browserDead()) {
+      log(`browser pid ${pid} is alive after ${GONE_AFTER_PROBES} failed probes; kept: ${reason}`);
+      return true;
+    }
     chromeUp = false;
     browser = null;
-    missedProbes = 0;
     dropSockets();
-    log(`browser went away after ${GONE_AFTER_PROBES} failed probes; last: ${reason}`);
+    log(`browser went away after ${GONE_AFTER_PROBES} failed probes; pid ${pid} is dead; last: ${reason}`);
     return true;
   };
   let answering = null;
