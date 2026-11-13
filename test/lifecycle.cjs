@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { finishTest } = require('./support.cjs');
+const { finishTest, confirmedGone, GONE_AFTER_PROBES } = require('./support.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WRAPPER = path.join(ROOT, 'bin', 'playwriter-project');
@@ -84,15 +84,6 @@ const until = async (check, ms = 8000) => {
     await sleep(200);
   }
   return false;
-};
-const GONE_AFTER_PROBES = 3;
-const PROBE_GAP_MS = IDLE_MS / 4;
-const confirmedGone = async (probe) => {
-  for (let miss = 1; miss <= GONE_AFTER_PROBES; miss += 1) {
-    if (await probe()) return false;
-    if (miss < GONE_AFTER_PROBES) await sleep(PROBE_GAP_MS);
-  }
-  return true;
 };
 const launcherGoneAfter = () => Number(/const GONE_AFTER_PROBES = (\d+);/.exec(fs.readFileSync(WRAPPER, 'utf8'))?.[1]);
 
