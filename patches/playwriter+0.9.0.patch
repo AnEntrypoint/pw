@@ -1,5 +1,5 @@
 diff --git a/node_modules/playwriter/dist/executor.js b/node_modules/playwriter/dist/executor.js
-index 7cafd7c..c2109f8 100644
+index 7cafd7c..ad5b9ef
 --- a/node_modules/playwriter/dist/executor.js
 +++ b/node_modules/playwriter/dist/executor.js
 @@ -713,6 +713,23 @@ export class PlaywrightExecutor {
@@ -46,8 +46,17 @@ index 7cafd7c..c2109f8 100644
          // Action timeout (click, fill, hover, etc.) is longer to tolerate slower
          // SPA/Turbo navigations and post-click settling on real sites.
          // Navigation timeout (goto, reload) remains separate.
+@@ -863,7 +878,7 @@ export class PlaywrightExecutor {
+     }
+     async ensureConnection() {
+         // In headless mode, check that this session's browser is still alive.
+-        const browserAlive = this.isHeadlessMode() ? this.browser?.isConnected() : true;
++        const browserAlive = this.browser?.isConnected() ?? false;
+         if (this.isConnected && this.browser && this.context && browserAlive) {
+             return { browser: this.browser, context: this.context };
+         }
 diff --git a/node_modules/playwriter/src/executor.ts b/node_modules/playwriter/src/executor.ts
-index a99244c..85d7987 100644
+index a99244c..7b50eb7
 --- a/node_modules/playwriter/src/executor.ts
 +++ b/node_modules/playwriter/src/executor.ts
 @@ -946,6 +946,23 @@ export class PlaywrightExecutor {
@@ -94,3 +103,12 @@ index a99244c..85d7987 100644
  
      // Action timeout (click, fill, hover, etc.) is longer to tolerate slower
      // SPA/Turbo navigations and post-click settling on real sites.
+@@ -1130,7 +1145,7 @@ export class PlaywrightExecutor {
+ 
+   private async ensureConnection(): Promise<{ browser: Browser; context: BrowserContext }> {
+     // In headless mode, check that this session's browser is still alive.
+-    const browserAlive = this.isHeadlessMode() ? this.browser?.isConnected() : true
++    const browserAlive = this.browser?.isConnected() ?? false
+     if (this.isConnected && this.browser && this.context && browserAlive) {
+       return { browser: this.browser, context: this.context }
+     }
