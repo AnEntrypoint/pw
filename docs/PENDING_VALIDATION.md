@@ -610,3 +610,13 @@ Witness needed before any push (not run here; the Windows part needs the hosted 
 - Risk to watch: on Windows each `commandOf` call starts PowerShell, which takes roughly a second. `stopChrome` polls `ownedBrowserPids` in `waitFor` loops with 10 s and 5 s budgets, so a stop may take longer on Windows; the 10 s per-call timeout bounds each call.
 
 Related defect, not fixed in this phase. `closeFromCaller` returns `{closed: true}` (line 631) even when `stopChrome` stopped nothing. The tool reports success while the browser runs. The fix belongs in a follow-up: return `closed: true` only after the debug port stops answering, and `closed: false` with the reason otherwise.
+
+## closeFromCaller reported a no-op as closed (Phase A; local commit, not run)
+
+Defect. `closeFromCaller` (`bin/playwriter-project`, the `closeFromCaller` function) returned `{closed: true, pid}` after `stopChrome` returned, whether or not anything was stopped. The no-op path is `stopChrome` returning `forgetBrowser()` when `ownedBrowserPids()` is empty (line 557), with no `Browser.close` and no signal. On Windows before `6ea2696` that is the normal outcome, and the tool then reported success while the browser kept running.
+
+Fix (local commit, not run). After `stopChrome`, the close waits up to 5 s for the debug port to stop answering. It returns `{closed: true, pid}` only if the port stops. Otherwise it returns `{closed: false, pid, reason: 'browser pid N still answers on port P after the stop'}`. A no-op therefore reports `closed: false` after the 5 s wait.
+
+Witness. The success path is `test/lifecycle.cjs` lines 196 and 197: `closed.closed.length === 1`, then the debug port must stop answering. Line 197 is also the Windows witness for `6ea2696`.
+
+Witness not yet written: the no-op path. It needs a browser whose command line lacks the profile path, so that `ownedBrowserPids()` is empty while the port still answers. Expected result: `closed: false` with the reason above. Until that check exists, the no-op fix is covered only by reading the code, so the no-op case is not witnessed.
