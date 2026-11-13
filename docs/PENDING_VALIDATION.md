@@ -456,3 +456,24 @@ Every refusal came after the stop that the test expected, and the logs fix that 
 Cause: the probe is not a defect. The refusals are the expected absence in the new negatives, and the count grows with the number of negative steps, not with failures. The gate logs show 0 `probe failed` lines in all three runs, so no gate probe failed in the gate's own tick either.
 
 Limit: the probe report has no timestamps. The one-to-one match between the logged stop times and the refusal counts is the evidence, not a per-probe timestamp.
+
+## Start refusal counted two browsers: the start poll gave up at 2 s and asked again (ec9f326, e916d84; Phase A)
+
+The full set on 9fbe76a (runner logdir /tmp/tmp.lUBQj5xBss) had 17 rows green and one red: `npm-test` exit 1 after 270868 ms. Its log ends with `start: FAILED: refusal: the browser is started once, not on each probe` and `2 !== 1`. The `start-refusal` row passed in the same run (9558 ms), and `npm test` alone then passed (243841 ms, no busy loop on the host, load 1.3 to 6.2).
+
+Cause, from the watch record of the gate for /tmp/pw-start-refusal-bqskch (its gate log lines are in `watch.jsonl`, gate 1868006):
+- Browser 1, pid 1868193, started at 00:27:28.321. The refusal was logged at 00:27:28.525.
+- Browser 2, pid 1868239, started at 00:27:30.178. The refusal was logged at 00:27:30.382. The launcher printed `browser failed` and exited at about 30.46.
+- The gate appeared at 00:27:26.356 and spawned its first browser at 00:27:28.321, about 2 s later. The likely slow step is `resolveFromConfig`, which runs a node process that imports the playwriter package before any browser is spawned. That is inferred from the code and the timeline; the gap itself is measured.
+- The start command's readiness poll asked `/json/version` with a literal 2000 ms timeout. That timeout fired before the refusal was logged. The poll found no `browser start failed` marker, slept 200 ms, and asked again at about 28.55. By then the refusal had cleared the gate's in-flight start, so the second request started a second browser.
+- Trigger: the start command's own readiness poll. It is not a probe threshold, not the call-path miss of fc2d19a (no browser was ever up, so `chromeUp` was never set), not a relaunch after a gate exit, and not the stale path.
+- Why it is load-dependent: the second request starts a browser only when the refusal lands between the 2 s give-up and the request 200 ms later. A slower gap moves the refusal into or out of that window. The isolated `start-refusal` run and the isolated `npm test` run both passed on the same launcher, so the window was not hit in those two runs. This is consistent with the intermittent failure, not a measured rate.
+
+Change (ec9f326, `bin/playwriter-project`): the 60 s start deadline was a literal in the start block. It is now the named constant `START_DEADLINE_MS = 60000` with the same value, next to the other constants. The start block sends one `/json/version` request with `START_DEADLINE_MS` and does not ask again. Outcomes: status 200 is ready; a 503 with the gate's `browser start failed` marker is the gate's reason; a timeout is `no answer on port N within 60 s`; any other error is reported as it is. The old loop re-asked after any answer without a marker. The new code never re-asks, so a give-up cannot start a second browser in the same run.
+
+Control (e916d84, `test/start-poll.cjs`, not in the npm test chain; scripts `start-poll-refuse` and `start-poll-ready`): an in-process stand-in gate answers `ping` and `lease`, and holds the first `/json/version` for the launcher's poll:
+- `refuse` mode: the start fails. The stand-in refuses when the poll gives up at 2 s, which models the refusal landing between the give-up and the next poll, as in the failing run. A fixed launcher, whose request does not give up, is refused at 2.5 s.
+- `ready` mode: the stand-in answers 200 at 2.5 s, which is a browser that comes up slowly.
+- Both modes require exactly one browser start and one readiness request, and their own exit and output. Pre-fix `019e683` in `refuse` mode must fail with two starts; the fixed launcher in `ready` mode must start once and report `browser ready`.
+
+Phase B: pending, recorded below with the host load and any busy loops in each run.
