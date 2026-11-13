@@ -403,7 +403,7 @@ Limits: the lifecycle runs produced no organic miss under this load, so the miss
 Ranked: every remaining item that needs neither the owner nor gm's repo, from this file, the README, DESIGN.md and docs/.
 
 1. Phase A d65edca, Phase B in the next section: the foreign-gate witness (`test/stale.cjs foreign`) joins the default stale run, so `npm test` covers it. This file kept it out until gm's kill-scope fix landed. `be9909f` is on origin/main, so that reason no longer applies. The witness only spawns and signals its own stub in its own temp directory, so it checks pw's identity check, not gm's kill path (see item 4 below).
-2. Lifecycle negatives are single probes at two places: the `gateUp()` and `chromeUp()` checks after `sleep(1500)` at the start, and the final `gateUp()` after its `until`. Under load one probe can time out on a live gate, and then the check passes falsely. Hardening needs a design (a negative held over a window), so it is not started.
+2. Lifecycle negatives: Phase A done (331b04b to efb8979, section below). A negative now needs three failed probes one tick apart (`confirmedGone`), so one timed-out probe on a live gate no longer passes. Phase B is pending.
 3. Item 1, the 19:25:34Z probe failure: open. Not reproduced in 10 quiet runs, 10 loaded lifecycle runs on f54098c, and 10 lifecycle plus 10 callprobe runs on 36846ac. The probe reasons and `failure.txt` are in place. This only moves on a recurrence.
 4. The shared-gate `execute` reply race from gm's follow-up task (runs/2026-11-11-18-32-18-2ed982): dd77686 added the raw reply when an execute call has no text. No failure has been seen since, and nothing here shows the race still happens, so there is nothing to fix.
 
@@ -420,3 +420,21 @@ Phase B on 5424cab (code d65edca; docs 70eac54 and 5424cab; gm job pb-fullset-p3
 - After the run: no process of these runs is left, gm's gate pid 1180507 is alive and untouched, and nothing listens on port 2531.
 - Longest step: the full-set runner, 573023 ms (9 min 33 s). Its longest row was npm-test, 213058 ms.
 - The top reachable item, the foreign witness in the default stale run, is done. Items 1 and 4 stay open.
+
+## Lifecycle negatives: three failed probes before a check reads "gone" (Phase A, then Phase B)
+
+Mechanism: a negative check passes only when the thing is confirmed gone by the launcher's own rule, three failed probes in a row one tick apart. `GONE_AFTER_PROBES = 3` is in `bin/playwriter-project`. The tick is `Math.min(5000, Math.max(200, IDLE_MS / 4))`, which is 1000 ms at the test's 4000 ms idle, so `confirmedGone` waits 1000 ms between probes. The pid route is not used: the gate writes no pid file (only `gate.log`, `browser.pid`, `browser.fingerprint` and the state JSON), so its pid is readable only while it answers. The checks here are about the gate port and the debug port, so the probe route is the one that matches them.
+
+Changes, each one a local commit as lanmower with no trailers; nothing pushed:
+
+- 331b04b, `test/lifecycle.cjs`: adds `GONE_AFTER_PROBES`, `PROBE_GAP_MS` (IDLE_MS / 4), `confirmedGone(probe)` and `launcherGoneAfter()`, and a sync assertion before the first check. Witness: `the test counts a gate or browser as gone after the same number of failed probes as the launcher`; it fails if the test's constant and the launcher's differ. The check count is unchanged.
+- 17594ae, check 1 `listing tools starts no gate and no browser`: the single `gateUp()` and `chromeUp()` probes become `confirmedGone`. Witness: assertions `listing tools starts no gate` and `listing tools starts no browser`.
+- c645f13, check 6 `browsers close stops the project browser when no other lease is held`: `until(!chromeUp())` becomes `until(() => confirmedGone(chromeUp), 10000)`. Witness: `the debug port stops answering after the close`.
+- a4d9032, check 7 `gate exits and the browser stays closed once the agent disconnects`: the gate wait and the extra single `gateUp()` assert become `until(() => confirmedGone(gateUp), IDLE_MS + 30000)`, and the browser assert becomes `until(() => confirmedGone(chromeUp), 10000)`. Witness: `the gate exits once the agent disconnects` and `the browser stays closed once the agent disconnects`.
+- 0c6f0a7, check 10 `CLI session browser stops after idle`: `until(!chromeUp())` becomes `until(() => confirmedGone(chromeUp), 12000)`. Witness: `the CLI session browser stops after idle`.
+- 3d76975, check 12 `everything is stopped at the end`: `!chromeUp() && !gateUp()` becomes a `confirmedGone` for each. Witness: `the browser and the gate are stopped at the end`.
+- efb8979, new `test/negative-control.cjs` and `package.json`: the `negative-control` script, and the same command as the last step of the `npm test` chain. The control starts a browser through an MCP session, holds a lease, takes the debug port's listener pid from `ss`, and SIGSTOPs it for 3500 ms (the injection `test/callprobe.cjs` uses). Inside that window it runs the old single probe and `confirmedGone` on the debug port. Witness: exit 0 only when the old probe reads the stopped browser as gone (`single-probe check: FAILED: ... this is the red control`) and `confirmedGone` does not (`confirmed check: ok`). The project directory is removed on success and kept on failure.
+
+Outside this change: `test/orphan.cjs` (`answering` after exit, one `/json/version` fetch with a 2 s timeout) and the answer helpers in `test/leases.cjs`, `test/fallback.cjs`, `test/ready.cjs` and `test/stale.cjs` are single-probe checks, but they are not lifecycle runs, so they are left for a separate pass. The `npm test` chain runs `test/lifecycle.cjs` and the control, so it picks up both changes.
+
+Phase B: pending. Phase A ran no build, test, gate or witness. Phase B will run the syntax check, `test/patch.cjs`, the lifecycle witness three times under 12 busy loops, the red control under the same loads, the full set once, and one push only if green. Each witness's wall time goes here when it runs.
