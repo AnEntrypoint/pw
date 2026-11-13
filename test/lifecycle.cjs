@@ -203,7 +203,7 @@ const failureReport = (error, gateText, probeText) => [
 
   const closed = JSON.parse((await m.call(6, 'tools/call', { name: 'browsers', arguments: { action: 'close', target: 'project' } })).result.content[0].text);
   assert.equal(closed.closed.length, 1);
-  assert.equal(await until(async () => !(await chromeUp()), 10000), true, 'the debug port stops answering after the close');
+  assert.equal(await until(() => confirmedGone(chromeUp), 10000), true, 'the debug port stops answering after the close');
   check('browsers close stops the project browser when no other lease is held');
 
   m.close();
