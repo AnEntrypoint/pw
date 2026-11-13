@@ -85,6 +85,16 @@ const until = async (check, ms = 8000) => {
   }
   return false;
 };
+const GONE_AFTER_PROBES = 3;
+const PROBE_GAP_MS = IDLE_MS / 4;
+const confirmedGone = async (probe) => {
+  for (let miss = 1; miss <= GONE_AFTER_PROBES; miss += 1) {
+    if (await probe()) return false;
+    if (miss < GONE_AFTER_PROBES) await sleep(PROBE_GAP_MS);
+  }
+  return true;
+};
+const launcherGoneAfter = () => Number(/const GONE_AFTER_PROBES = (\d+);/.exec(fs.readFileSync(WRAPPER, 'utf8'))?.[1]);
 
 function mcpClient() {
   const child = spawn(process.execPath, [WRAPPER], { cwd: PROJ, env: ENV, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -150,6 +160,7 @@ const failureReport = (error, gateText, probeText) => [
 ].join('\n\n') + '\n';
 
 (async () => {
+  assert.equal(launcherGoneAfter(), GONE_AFTER_PROBES, 'the test counts a gate or browser as gone after the same number of failed probes as the launcher');
   const m = mcpClient();
   await m.call(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
   m.notify('notifications/initialized');
