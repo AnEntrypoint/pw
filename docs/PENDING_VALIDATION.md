@@ -646,3 +646,16 @@ Read once by the dispatcher and recorded as given. I did not re-read the log and
 - PowerShell 7 is on the hosted `windows-latest` runner: the Lifecycle step runs under `C:\Program Files\PowerShell\7\pwsh.EXE`. The Lifecycle step has no `shell:` key (`.github/workflows/windows-scan.yml` lines 19 to 20), so it runs under the runner's default Windows shell, which is pwsh.
 - The failure is the same symptom as before the fix: the debug port still answers after the close (`debug-port /json/version` last "ok", ok x52). `607018e` is before `6ea2696`, so this is the pre-fix behaviour.
 - So `6ea2696` is the candidate fix for that symptom. The windows-scan for `d13cede` decides it, at line 197 of `test/lifecycle.cjs` (`the debug port stops answering after the close`).
+
+## closeFromCaller refusals: the other-lease and pid-mismatch witnesses (Phase A: written, not run)
+
+Status: written and committed locally. Not built, not run, not pushed, and no hosted call made. Phase B waits for the dispatcher's read of the d13cede windows-scan result. Then both witnesses run in the same push as any Windows fix, and the push is followed by one hosted status call.
+
+Witnesses, in `test/close-refusals.cjs` (`npm run close-refusals`, and the `npm test` chain after `close-noop`):
+
+- W-lease, the other-lease refusal. Setup: the MCP session holds the project lease, and the test opens a second lease with `X-Pwp-Pid` set to the test's own pid. Request: `POST /__pwp/close?self=<MCP session pid>&force=0`. Expected: `closed: false`, the browser pid, reason `1 other lease(s) held`, and one listed lease whose pid is the test's pid. The browser still answers on its debug port, and the gate log has no `stopping browser` line after the request. Why `self` is the MCP session's pid: the MCP proxy writes its own pid into its lease (the raw lease write near `bin/playwriter-project` line 858), and `closeFromCaller` drops the lease whose pid equals `self` (line 624). So only the test's lease is counted, and the reason is `1 other lease(s) held` (line 628).
+- W-pid, the pid-mismatch refusal. Request: `POST /__pwp/close?self=<MCP session pid>&force=0&pid=<test pid>`. Expected: `closed: false`, the browser pid, reason `pid <test pid> is not this project's browser, which is pid <browser pid>` (line 627). The browser still answers, and the gate log has no `stopping browser` line. The pid check runs before the lease check (lines 627, then 628), so W-pid runs with only the MCP lease held.
+
+Not witnessed here: `force=1` closing past another lease, and the adopted refusal (`was adopted`). Both are outside this stretch.
+
+Phase B, after the d13cede result is read: `node test/close-refusals.cjs` alone; then the full set once on the final tree, with `close-refusals` as a row; then one push; then one hosted status call. Any Windows fix the d13cede result needs goes into that same push.
