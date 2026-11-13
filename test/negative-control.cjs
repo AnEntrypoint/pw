@@ -4,15 +4,13 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { finishTest, mcpSession, sleep } = require('./support.cjs');
+const { finishTest, mcpSession, sleep, confirmedGone, GONE_AFTER_PROBES } = require('./support.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-negative-control-'));
 const STATE = path.join(PROJ, '.playwriter');
 const STOP_MS = 3500;
 const PROBE_TIMEOUT_MS = 3000;
-const PROBE_GAP_MS = 1000;
-const GONE_AFTER_PROBES = 3;
 
 const readPort = (name) => Number(fs.readFileSync(path.join(STATE, name), 'utf8'));
 const launcherGoneAfter = () => Number(/const GONE_AFTER_PROBES = (\d+);/.exec(fs.readFileSync(path.join(ROOT, 'bin', 'playwriter-project'), 'utf8'))?.[1]);
@@ -47,13 +45,6 @@ const answers = (port) => new Promise((resolve) => {
   });
 });
 const singleProbeGone = async (port) => !(await answers(port));
-const confirmedGone = async (port) => {
-  for (let miss = 1; miss <= GONE_AFTER_PROBES; miss += 1) {
-    if (await answers(port)) return false;
-    if (miss < GONE_AFTER_PROBES) await sleep(PROBE_GAP_MS);
-  }
-  return true;
-};
 const waitFor = async (check, ms) => {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -105,7 +96,7 @@ const resume = () => {
     let newGone;
     try {
       oldGone = await singleProbeGone(debugPort);
-      newGone = await confirmedGone(debugPort);
+      newGone = await confirmedGone(() => answers(debugPort));
     } finally {
       clearTimeout(timer);
       resume();
