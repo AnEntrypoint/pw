@@ -18,7 +18,7 @@ const read = (target) => {
   }
 };
 const tail = (target, lines = 6) => read(target).trimEnd().split('\n').filter(Boolean).slice(-lines);
-const procs = require('../test/procs.cjs');
+const procs = require('../lib/procs');
 const { pids, statOf, commandOf } = procs;
 const varsOf = (pid) => procs.envOf(pid).split('\0');
 const varOf = (vars, key) => {

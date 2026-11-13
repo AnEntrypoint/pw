@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { ROOT } = require('./support.cjs');
-const { isAlive } = require('./procs.cjs');
+const { isAlive } = require('../lib/procs');
 
 const RUNNER = path.join(ROOT, 'scripts', 'phase-b.cjs');
 const LEAK = "node -e \"const c=require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},120000)'],{stdio:'ignore'});c.unref();require('node:fs').writeFileSync(process.env.LEAK_PID_FILE,String(c.pid))\"";

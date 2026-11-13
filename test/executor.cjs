@@ -7,7 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { spawn, execFileSync } = require('node:child_process');
 const http = require('node:http');
 const { ROOT, sleep } = require('./support.cjs');
-const { commandOf } = require('./procs.cjs');
+const { commandOf } = require('../lib/procs');
 
 const MODE = process.argv[2];
 const DIST = path.join(ROOT, 'node_modules', 'playwriter', 'dist');

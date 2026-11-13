@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const procs = require('../test/procs.cjs');
+const procs = require('../lib/procs');
 
 const ROOT = path.resolve(__dirname, '..');
 const RUN_ID = randomUUID();

@@ -1,7 +1,7 @@
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { processRows } = require('./procs.cjs');
+const { processRows } = require('../lib/procs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WRAPPER = path.join(ROOT, 'bin', 'playwriter-project');

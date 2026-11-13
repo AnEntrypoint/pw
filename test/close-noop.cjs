@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { ROOT, finishTest, mcpSession, sleep, stopPids } = require('./support.cjs');
-const { commandOf, isAlive } = require('./procs.cjs');
+const { commandOf, isAlive } = require('../lib/procs');
 
 const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-close-noop-'));
 const STATE = path.join(PROJ, '.playwriter');

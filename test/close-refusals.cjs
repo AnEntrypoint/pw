@@ -4,7 +4,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { finishTest, mcpSession, sleep } = require('./support.cjs');
-const { isAlive } = require('./procs.cjs');
+const { isAlive } = require('../lib/procs');
 
 const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-close-refusals-'));
 const STATE = path.join(PROJ, '.playwriter');

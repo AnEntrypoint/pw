@@ -8,6 +8,7 @@ const { pathToFileURL } = require('node:url');
 const { spawn, execFile, execFileSync } = require('node:child_process');
 const { listBrowsers, browserLines, browserReport } = require('../lib/browsers');
 const { signalPid } = require('../lib/signal');
+const { commandOf } = require('../lib/procs');
 
 let PLAYWRITER_DIR;
 try {
@@ -269,18 +270,6 @@ function pidAlive(pid) {
   }
   const state = process.platform === 'linux' ? readRaw(`/proc/${pid}/stat`)?.split(') ')[1]?.[0] : null;
   return state !== 'Z' && state !== 'X';
-}
-
-function commandOf(pid) {
-  if (process.platform === 'linux') return readRaw(`/proc/${pid}/cmdline`)?.replaceAll('\0', ' ') ?? '';
-  try {
-    if (process.platform === 'win32') {
-      return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 });
-    }
-    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch {
-    return '';
-  }
 }
 
 function isOwnGate(pid, port) {

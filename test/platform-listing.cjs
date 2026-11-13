@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
-const procs = require('./procs.cjs');
+const procs = require('../lib/procs');
 const { finishTest, processTable } = require('./support.cjs');
 
 const CHROME = '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir=C:\\pw\\profile --remote-debugging-port=9222';
