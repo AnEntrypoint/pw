@@ -231,7 +231,7 @@ const failureReport = (error, gateText, probeText) => [
   check('CLI session reconnects after idle and the cookie survived');
 
   await sleep(IDLE_MS + 8000);
-  assert.equal(await until(async () => !(await chromeUp()) && !(await gateUp()), 15000), true, 'the browser and the gate are stopped at the end');
+  assert.equal(await until(async () => (await confirmedGone(chromeUp)) && (await confirmedGone(gateUp)), 15000), true, 'the browser and the gate are stopped at the end');
   check('everything is stopped at the end');
 
   spawnSync(process.execPath, [path.join(ROOT, 'node_modules', 'playwriter', 'bin.js'), 'session', 'delete', sid], { env: ENV, encoding: 'utf8' });
