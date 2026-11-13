@@ -8,7 +8,7 @@
   },
   "scripts": {
     "postinstall": "patch-package --error-on-fail",
-    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs && node test/signals.cjs && node test/fallback.cjs && node test/ready.cjs && node test/stale.cjs && node test/start.cjs && node test/signal.cjs && node test/callprobe.cjs && node test/negative-control.cjs && node test/live-browser.cjs && node test/executor.cjs direct && node test/executor.cjs headless && node test/giveup.cjs && node test/close-noop.cjs && node test/close-refusals.cjs && node test/platform-listing.cjs && node test/adopted-refusal.cjs && node test/commandof-win32.cjs",
+    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs && node test/signals.cjs && node test/fallback.cjs && node test/ready.cjs && node test/stale.cjs && node test/start.cjs && node test/signal.cjs && node test/callprobe.cjs && node test/negative-control.cjs && node test/live-browser.cjs && node test/executor.cjs direct && node test/executor.cjs headless && node test/giveup.cjs && node test/close-noop.cjs && node test/close-refusals.cjs && node test/platform-listing.cjs && node test/adopted-refusal.cjs && node test/commandof-win32.cjs && node test/teardown-hold.cjs",
     "witness": "node test/memory.cjs",
     "f1": "node test/firstpage.cjs",
     "orphan": "node test/orphan.cjs",
@@ -37,7 +37,8 @@
     "close-refusals": "node test/close-refusals.cjs",
     "platform-listing": "node test/platform-listing.cjs",
     "adopted-refusal": "node test/adopted-refusal.cjs",
-    "commandof-win32": "node test/commandof-win32.cjs"
+    "commandof-win32": "node test/commandof-win32.cjs",
+    "teardown-hold": "node test/teardown-hold.cjs"
   },
   "engines": {
     "node": ">=22"

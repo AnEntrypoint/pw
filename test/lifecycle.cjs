@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { finishTest, confirmedGone, GONE_AFTER_PROBES } = require('./support.cjs');
+const { finishTest, confirmedGone, GONE_AFTER_PROBES, processTable, releaseDirectory, stopPids } = require('./support.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WRAPPER = path.join(ROOT, 'bin', 'playwriter-project');
@@ -13,6 +13,11 @@ const STATE = path.join(PROJ, '.playwriter');
 const IDLE_MS = 4000;
 const ENV = { ...process.env, PLAYWRITER_PROJECT_DIR: PROJ, PLAYWRITER_IDLE_MS: String(IDLE_MS), PLAYWRITER_TELEMETRY: '0' };
 const FORCE = process.env.PWP_LIFECYCLE_FORCE;
+const GATE_LOG = path.join(STATE, 'gate.log');
+const RELAY = /start-relay-server|playwriter-ws-server/;
+const relayPids = () => processTable().filter((row) => RELAY.test(row.cmd)).map((row) => row.pid);
+const relaysAtStart = new Set(relayPids());
+const mcpPids = [];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const PROBE_TIMEOUT_MS = 3000;
@@ -89,6 +94,7 @@ const launcherGoneAfter = () => Number(/const GONE_AFTER_PROBES = (\d+);/.exec(f
 
 function mcpClient() {
   const child = spawn(process.execPath, [WRAPPER], { cwd: PROJ, env: ENV, stdio: ['pipe', 'pipe', 'pipe'] });
+  mcpPids.push(child.pid);
   const waiters = new Map();
   let buf = '';
   child.stdout.on('data', (chunk) => {
@@ -122,6 +128,13 @@ function mcpClient() {
     close: () => child.stdin.end(),
   };
 }
+
+const loggedPids = (pattern) => (fs.existsSync(GATE_LOG) ? [...fs.readFileSync(GATE_LOG, 'utf8').matchAll(pattern)].map((match) => Number(match[1])) : []);
+const holdersStarted = () => [
+  ...mcpPids.map((pid) => ({ pid, cmd: /playwriter-project/ })),
+  ...loggedPids(/gate pid=(\d+)/g).map((pid) => ({ pid, cmd: /playwriter-project.*--gate/ })),
+  ...loggedPids(/browser started pid=(\d+)/g).map((pid) => ({ pid, cmd: /--user-data-dir=/ })),
+];
 
 const cli = (args) => spawnSync(process.execPath, [WRAPPER, ...args], { cwd: PROJ, env: ENV, encoding: 'utf8', timeout: 120000 });
 
@@ -232,7 +245,9 @@ const failureReport = (error, gateText, probeText) => [
   .then(async () => {
     if (FORCE === 'cleanup') throw new Error('forced failure in cleanup (PWP_LIFECYCLE_FORCE=cleanup)');
     await finishTest('lifecycle');
-    fs.rmSync(PROJ, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
+    const relays = relayPids().filter((pid) => !relaysAtStart.has(pid));
+    if (relays.length > 0) await stopPids(relays);
+    await releaseDirectory(PROJ, holdersStarted());
     process.exit(0);
   })
   .catch(async (error) => {

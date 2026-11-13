@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
@@ -23,6 +24,54 @@ const confirmedGone = async (probe, gapMs = PROBE_GAP_MS) => {
 };
 function processTable() {
   return processRows();
+}
+
+function holdersOf(roots) {
+  const rows = processRows();
+  const tree = new Map();
+  for (const root of roots) {
+    const row = rows.find((candidate) => candidate.pid === root.pid && candidate.pid !== process.pid && root.cmd.test(candidate.cmd));
+    if (row) tree.set(row.pid, row.cmd);
+  }
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const row of rows) {
+      if (tree.has(row.ppid) && !tree.has(row.pid) && row.pid !== process.pid) {
+        tree.set(row.pid, row.cmd);
+        grew = true;
+      }
+    }
+  }
+  return tree;
+}
+
+function liveIn(tree) {
+  const now = new Map(processRows().map((row) => [row.pid, row.cmd]));
+  return [...tree].filter(([pid, cmd]) => now.get(pid) === cmd).map(([pid]) => pid);
+}
+
+const describeHolders = (tree, pids) => pids.map((pid) => `${pid} ${tree.get(pid)}`).join('; ') || 'none';
+
+async function releaseDirectory(dir, roots, { graceMs = 30000 } = {}) {
+  const tree = holdersOf(roots);
+  const end = Date.now() + graceMs;
+  let running = liveIn(tree);
+  while (running.length > 0 && Date.now() < end) {
+    await sleep(500);
+    running = liveIn(tree);
+  }
+  const stopped = running;
+  if (running.length > 0) {
+    await stopPids(running);
+    running = liveIn(tree);
+  }
+  if (running.length > 0) throw new Error(`${dir} is still held: ${describeHolders(tree, running)} survived the stop`);
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
+  } catch (error) {
+    throw new Error(`${dir} is still held after every recorded process stopped (${error.code ?? error.message}); recorded: ${describeHolders(tree, [...tree.keys()])}`);
+  }
+  return { stopped };
 }
 
 function projectProcs(proj) {
@@ -168,4 +217,4 @@ function mcpSession(proj, env = {}) {
   };
 }
 
-module.exports = { ROOT, WRAPPER, TOKEN, sleep, GONE_AFTER_PROBES, PROBE_GAP_MS, confirmedGone, processTable, projectProcs, label, summarize, stopPids, alive, finishTest, ownedRows, mcpSession };
+module.exports = { ROOT, WRAPPER, TOKEN, sleep, GONE_AFTER_PROBES, PROBE_GAP_MS, confirmedGone, processTable, projectProcs, label, summarize, stopPids, alive, finishTest, ownedRows, releaseDirectory, mcpSession };

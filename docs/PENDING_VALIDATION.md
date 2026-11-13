@@ -722,3 +722,31 @@ Change, which closes the gap by making the gate and the tests run one function. 
 Witness, new: `test/commandof-win32.cjs` (`npm run commandof-win32`; in the `npm test` chain after `adopted-refusal`). It runs on Linux, with `process.platform` reported as win32 and `powershell.exe` stubbed. It checks: the success path with CRLF output returns the trimmed command line; the query names the pid, reads `Win32_Process`'s `CommandLine`, and has a 10 s timeout; the gate's profile match finds this project's profile and not another; a PowerShell failure gives `''`; a non-numeric pid becomes `NaN`, and its text never reaches the script; an unknown pid gives `''`; and the launcher imports this `commandOf` and defines none of its own.
 
 Red controls, for Phase B. (a) In `lib/procs.js`, make the win32 branch rethrow instead of returning `''`; the witness must fail at the PowerShell-failure check. (b) Drop the `.trim()` on the win32 branch; the success check must fail on the CRLF. Restore each with `git checkout`, then confirm the tree is clean.
+
+## Windows EBUSY at `test/lifecycle.cjs:235`: the holder, the teardown wait and the final check (Phase A: diagnosis, fix and witness; committed locally; not pushed)
+
+Hosted failure. Run 43358661510 (windows-scan on `d79445a`). The lifecycle printed `12 checks passed`, then `rmSync` of `C:\Users\RUNNER~1\AppData\Local\Temp\pw-test-8Hb274` threw EBUSY at `test/lifecycle.cjs:235`, the removal in the old teardown. Both probes were refused (gate on 9437, debug port on 9937). The hosted log was not read, so which process held the directory on that run is not confirmed here. The holders below are named from the code.
+
+Why nothing waited. `finishTest` finds leftovers by the test token in each process's environment. On win32, `envOf` returns `''` (`lib/procs.js`), so `ownedRows` is empty there. The sweep waits for nothing and stops nothing, and the teardown removed the directory at once.
+
+Holders, from the code. On Windows a process keeps a directory locked while the directory is its current directory or a file in it is open to that process. Four groups in this run have `PROJ` as their cwd or hold files in it:
+
+1. The relay `playwriter-ws-server`. `node_modules/playwriter/dist/relay-client.js:251` starts it with `detached: true`, `stdio: 'ignore'` and no `cwd`, so it inherits the cwd of the CLI that started it. The test's CLI calls run with `cwd: PROJ`, so a call that needs the relay starts it there when none listens on port 19988. `start-relay-server.js` exits only on SIGINT or SIGTERM, so it outlives the run, and nothing in the test records its pid. It is the holder that fits the symptom: it does not go away by itself, so the 20 retries of `rmSync` cannot clear it. Whether the hosted run started one is not read from its log.
+2. The gate (`bin/playwriter-project`, `ensureGate`: detached, `cwd: PROJECT`, log in STATE). It exits after the idle time, but nothing waited for it by pid.
+3. The MCP child (`test/lifecycle.cjs`, `mcpClient`: `cwd: PROJ`). `m.close()` ends its stdin, and nothing waited for its exit.
+4. The browser tree (`bin/playwriter-project`, the browser spawn that logs `browser started pid=`), with `browser.log` and the profile open under STATE. Its cwd comes from the gate.
+
+Fix.
+
+- `bin/playwriter-project`: the gate logs `gate pid=<pid>` when it starts listening, so the test can name the gates it started from its own log.
+- `test/support.cjs` `releaseDirectory(dir, roots, { graceMs = 30000 })`. Each root is `{ pid, cmd }`. A root counts only while the process with that pid still has the recorded command line, so a reused pid is never waited for or stopped. It waits up to 30 s for the roots and their descendants to exit by themselves. Survivors are stopped by pid (`stopPids`: SIGTERM, then SIGKILL) and returned in `stopped`. Then it removes the directory. If removal still fails, it throws `<dir> is still held after every recorded process stopped (<code>); recorded: ...`. That is the teardown check.
+- `test/lifecycle.cjs` teardown: relays that were not listening when the test started are stopped by pid (`relaysAtStart`; the relay already on the port is not touched). Then `releaseDirectory(PROJ, ...)` runs with the MCP child pids, the gate pids and the browser pids from the gate log.
+- `test/teardown-hold.cjs`, new (`npm run teardown-hold`; in the `npm test` chain after `commandof-win32`). It runs on Linux and checks four things. A holder that exits by itself is waited for: `stopped` is empty, its exit is code 0 with no signal, and the directory is removed. A holder that outlives the grace is stopped by its own pid with SIGTERM, and the directory is removed. A pid recorded with a different command line is neither waited for nor stopped, and it keeps running. A directory still busy after everything stopped fails with `is still held after every recorded process stopped (EBUSY)`.
+
+Red control, for Phase B. Skip the wait (`while (false) {` in `releaseDirectory`). The holder is then stopped at once and the witness fails on `stopped`, expected `[]`, actual `[pid]`. The saved copy is restored afterwards.
+
+Not covered here.
+
+- The relay branch (stopping relays started during the run) runs only when the test starts a relay. On this machine relay pid 88264 was already listening on 19988, so the CLI reused it and the branch did not run. The hosted runner starts with no relay, so the windows-scan is what exercises that branch.
+- `finishTest` is still blind on win32 (`envOf` returns `''`), so it checks nothing on Windows. `releaseDirectory` is the check that works there.
+- Nothing ran on Windows here. The Windows lifecycle row runs only on the hosted windows-scan, after the owner's go.
