@@ -620,3 +620,15 @@ Fix (local commit, not run). After `stopChrome`, the close waits up to 5 s for t
 Witness. The success path is `test/lifecycle.cjs` lines 196 and 197: `closed.closed.length === 1`, then the debug port must stop answering. Line 197 is also the Windows witness for `6ea2696`.
 
 Witness not yet written: the no-op path. It needs a browser whose command line lacks the profile path, so that `ownedBrowserPids()` is empty while the port still answers. Expected result: `closed: false` with the reason above. Until that check exists, the no-op fix is covered only by reading the code, so the no-op case is not witnessed.
+
+## No-op witness for closeFromCaller (row `close-noop`): green on the fix, red on 9b565f3
+
+Witness: `test/close-noop.cjs` (`npm run close-noop`, and the end of the `npm test` chain). It closes the gap in the section above.
+
+Method. The browser is started through a wrapper script: `PLAYWRITER_BROWSER_PATH` points at it, it rewrites `--user-data-dir=` to `PROJ/alt-profile`, and it `exec`s the real Chromium from `resolveBrowserExecutablePath()`. The browser pid therefore runs with a command line that lacks the gate profile, so `ownedBrowserPids()` is empty, `stopChrome` takes the forget path, and the browser keeps answering on its debug port. The test POSTs `/__pwp/close?self=<MCP pid>&force=0`, which is the request the browsers tool sends, and asserts the no-op outcome: `closed: false`, the browser pid, and a reason matching `still answers on port N after the stop`. It also asserts that the pid is alive and `/json/version` answers. Then it stops its own browser pid by PID and checks that the pid is gone.
+
+Green, run alone on the tree that adds this witness: exit 0, wall 15207 ms. Output: `close-noop: ok: browser pid 2375900 was left running and reported as not closed: browser pid 2375900 still answers on port 10096 after the stop`, then `close-noop: all checks passed`. No leftover processes.
+
+Red control. The launcher before the fix (`9b565f3`) was put in `bin/` for one run, and HEAD was restored (`git diff --stat -- bin/` is empty afterwards). Result: exit 1, `close-noop: FAILED: a stop that leaves the browser running is reported as not closed`, with `true !== false`. The old code reported the no-op as closed, so the witness fails on the defect and passes on the fix.
+
+The full-set result for this tree is recorded in the next record commit.
