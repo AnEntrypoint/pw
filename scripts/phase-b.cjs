@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const procs = require('../test/procs.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const RUN_ID = randomUUID();
@@ -11,20 +12,7 @@ const LEFTOVER_GRACE_MS = 15000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const markedPids = () => {
-  const pids = [];
-  for (const entry of fs.readdirSync('/proc')) {
-    if (!/^\d+$/.test(entry)) continue;
-    let vars = '';
-    try {
-      vars = fs.readFileSync(`/proc/${entry}/environ`, 'utf8');
-    } catch {
-      continue;
-    }
-    if (vars.split('\0').includes(MARK)) pids.push(Number(entry));
-  }
-  return pids;
-};
+const markedPids = () => procs.pids().filter((pid) => procs.envOf(pid).split('\0').includes(MARK));
 
 const signal = (pid, name) => {
   try {

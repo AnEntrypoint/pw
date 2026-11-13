@@ -17,7 +17,7 @@ const exitedPid = () => new Promise((resolve) => {
 const exited = (child) => new Promise((resolve) => child.on('exit', resolve));
 
 function foreignPid() {
-  if (process.getuid() === 0) return null;
+  if (process.platform !== 'linux' || process.getuid() === 0) return null;
   for (const entry of fs.readdirSync('/proc')) {
     if (!/^\d+$/.test(entry)) continue;
     let status = '';

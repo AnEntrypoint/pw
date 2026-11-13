@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { spawn, execFileSync } = require('node:child_process');
 const http = require('node:http');
 const { ROOT, sleep } = require('./support.cjs');
+const { commandOf } = require('./procs.cjs');
 
 const MODE = process.argv[2];
 const DIST = path.join(ROOT, 'node_modules', 'playwriter', 'dist');
@@ -73,7 +74,7 @@ async function direct() {
   try {
     assert.ok(await waitFor(() => answers(port), 30000), `Chrome answers on port ${port}`);
     pid = listenerPid(port);
-    assert.ok(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(`--user-data-dir=${profile}`), `pid ${pid} on port ${port} is this test's browser`);
+    assert.ok(commandOf(pid).includes(`--user-data-dir=${profile}`), `pid ${pid} on port ${port} is this test's browser`);
     const executor = new PlaywrightExecutor({ cdpConfig: { directCdpUrl: `http://127.0.0.1:${port}` }, logger: quiet });
     const first = await executor.ensureConnection();
     const before = first.browser;

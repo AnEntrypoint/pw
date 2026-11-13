@@ -659,3 +659,24 @@ Witnesses, in `test/close-refusals.cjs` (`npm run close-refusals`, and the `npm 
 Not witnessed here: `force=1` closing past another lease, and the adopted refusal (`was adopted`). Both are outside this stretch.
 
 Phase B, after the d13cede result is read: `node test/close-refusals.cjs` alone; then the full set once on the final tree, with `close-refusals` as a row; then one push; then one hosted status call. Any Windows fix the d13cede result needs goes into that same push.
+
+## Windows finishTest read /proc: the d13cede lifecycle failure, and the fix (Phase A: written and committed; not built or run)
+
+Hosted result (the dispatcher's read of the d13cede windows-scan, run 43355843391; failure; pwsh 7 on `D:\a\pw\pw`). The lifecycle printed `12 checks passed`, then `test/lifecycle.cjs:234` threw `ENOENT: no such file or directory, scandir 'D:\proc'`. Line 234 is `await finishTest('lifecycle')`. `finishTest` calls `ownedRows`, which calls `processTable`, which read `/proc` with `fs.readdirSync('/proc')` (the pre-fix `test/support.cjs`). The twelve checks are the lifecycle's own `check()` calls, and the one after the line-197 assertion is among them. So line 197 (`the debug port stops answering after the close`) passed on Windows, and the close symptom is no longer the failure. The failure is the sweep after the checks.
+
+Every `/proc` reader, and its status after this change:
+
+- Product, unchanged. Each reader runs only behind `process.platform === 'linux'`, and win32 never reaches it: `bin/playwriter-project` `linuxListenerPid` (lines 216 to 240, called from `listenerPid` only on linux), `pidAlive` (line 270), `commandOf` (line 275; its win32 branch is the PowerShell command from `6ea2696`); `lib/browsers.js` `linuxProcesses` (lines 76 to 78, reached only from `processRows` on linux; win32 uses `windowsProcesses`, the PowerShell listing). The win32 listener lookup returns null, as before; `startChrome` then uses the pid it spawned.
+- Tests and scripts, changed to read through the new `test/procs.cjs`: `test/support.cjs` `processTable` (the failing reader); `test/phase-b.cjs` `alive`; `test/giveup.cjs` `alive` and `aliveNow`; `test/close-noop.cjs` `alive` and the command-line read; `test/close-refusals.cjs` `alive`; `test/executor.cjs` the command-line read; `test/signal.cjs` `foreignPid`, which now returns null off linux (there is no uid on win32, so there is no foreign process to find); `scripts/phase-b.cjs` `markedPids`; `scripts/watch.cjs` `pids`, `statOf`, `commandOf` and `varsOf`.
+
+What win32 does now. `test/procs.cjs` `processRows` runs one PowerShell query (`Get-CimInstance Win32_Process`, with process id, parent, working set and command line). `commandOf` runs the per-pid PowerShell query from `6ea2696`. `envOf` returns `''`, because Windows does not expose another process's environment through that query. So `ownedRows` matches nothing on win32, and the sweep stops no process there. Leftover accounting by environment marker is off on win32; this record does not claim otherwise.
+
+Witness, new: `test/platform-listing.cjs` (`npm run platform-listing`; in the `npm test` chain after `close-refusals`). It runs on Linux. It reports `process.platform` as `win32`, refuses every `/proc` read (ENOENT, recorded), and stubs `powershell.exe`. It asserts that `processTable` returns the listed row with its parent and working set; that `commandOf`, `envOf` and `isAlive` work without `/proc`; that `finishTest` returns no leftovers; that the listing went through PowerShell; and that no `/proc` path was read.
+
+Red on the code before the fix: the witness with `test/support.cjs` from `ac603ae` (the old `processTable`) must fail with `ENOENT: no such file or directory, scandir '/proc'`. Phase B runs that control and records it below.
+
+Other witnesses this push must carry, because their files changed: `test/lifecycle.cjs` alone on Linux (its sweep now goes through `procs`), and the full set, which covers `giveup`, `close-noop`, `close-refusals`, `phase-b`, `signal`, `executor-direct`, `executor-headless` and `npm-test`, plus the new `platform-listing` and `close-refusals` rows.
+
+Hosted witness for this push: the windows-scan on the new head, its lifecycle line 234 (the sweep) and line 197 (the close). Read once by the dispatcher, not polled.
+
+Approval and reason. The first Phase B push, `d13cede`, broke a listed witness: the Windows lifecycle row, at `test/lifecycle.cjs:234`, through `finishTest` on win32. The dispatcher approves this second push for that fix only. The reason goes in the owner report. The push also carries `20ff80b` (the dispatcher's reading record) and `ac603ae` (the refusal witnesses, not yet run), as set out in the refusals section above.

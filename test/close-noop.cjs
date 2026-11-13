@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { ROOT, finishTest, mcpSession, sleep, stopPids } = require('./support.cjs');
+const { commandOf, isAlive } = require('./procs.cjs');
 
 const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-close-noop-'));
 const STATE = path.join(PROJ, '.playwriter');
@@ -35,14 +36,6 @@ const waitFor = async (check, ms) => {
     await sleep(200);
   }
   return null;
-};
-const alive = (pid) => {
-  try {
-    const state = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]?.[0];
-    return state !== undefined && state !== 'Z' && state !== 'X';
-  } catch {
-    return false;
-  }
 };
 const wrapperScript = (browser) => [
   '#!/bin/sh',
@@ -77,7 +70,7 @@ const wrapperScript = (browser) => [
     browserPid = status.browser.pid;
     assert.equal(status.browser.adopted, false, 'the gate started the browser itself');
 
-    const cmdline = fs.readFileSync(`/proc/${browserPid}/cmdline`, 'utf8');
+    const cmdline = commandOf(browserPid);
     assert.ok(cmdline.includes(`--user-data-dir=${ALT_PROFILE}`), `browser pid ${browserPid} runs on the alternate profile`);
     assert.ok(!cmdline.includes(`--user-data-dir=${PROFILE}`), `browser pid ${browserPid} is not on the gate profile, so the gate does not own it`);
 
@@ -85,12 +78,12 @@ const wrapperScript = (browser) => [
     assert.equal(outcome.closed, false, 'a stop that leaves the browser running is reported as not closed');
     assert.equal(outcome.pid, browserPid, 'the report names the browser that is still running');
     assert.match(outcome.reason, /still answers on port \d+ after the stop/, `the report says why: ${outcome.reason}`);
-    assert.equal(alive(browserPid), true, `browser pid ${browserPid} is still running after the reported stop`);
+    assert.equal(isAlive(browserPid), true, `browser pid ${browserPid} is still running after the reported stop`);
     assert.equal((await request('GET', status.debugPort, '/json/version', 5000)).status, 200, 'the debug port still answers after the reported stop');
     console.log(`close-noop: ok: browser pid ${browserPid} was left running and reported as not closed: ${outcome.reason}`);
 
     await stopPids([browserPid]);
-    assert.equal(alive(browserPid), false, `the test stopped its own browser pid ${browserPid}`);
+    assert.equal(isAlive(browserPid), false, `the test stopped its own browser pid ${browserPid}`);
     await session.end();
     await finishTest('close-noop');
     fs.rmSync(PROJ, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });

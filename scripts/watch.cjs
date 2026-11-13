@@ -18,16 +18,9 @@ const read = (target) => {
   }
 };
 const tail = (target, lines = 6) => read(target).trimEnd().split('\n').filter(Boolean).slice(-lines);
-const pids = () => fs.readdirSync('/proc').filter((name) => /^\d+$/.test(name)).map(Number);
-const statOf = (pid) => {
-  const raw = read(`/proc/${pid}/stat`);
-  const close = raw.lastIndexOf(')');
-  if (close < 0) return null;
-  const fields = raw.slice(close + 2).split(' ');
-  return { state: fields[0], ppid: Number(fields[1]) };
-};
-const commandOf = (pid) => read(`/proc/${pid}/cmdline`).split('\0').join(' ').trim();
-const varsOf = (pid) => read(`/proc/${pid}/environ`).split('\0');
+const procs = require('../test/procs.cjs');
+const { pids, statOf, commandOf } = procs;
+const varsOf = (pid) => procs.envOf(pid).split('\0');
 const varOf = (vars, key) => {
   const hit = vars.find((item) => item.startsWith(`${key}=`));
   return hit ? hit.slice(key.length + 1) : null;

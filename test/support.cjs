@@ -1,7 +1,7 @@
-const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { processRows } = require('./procs.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WRAPPER = path.join(ROOT, 'bin', 'playwriter-project');
@@ -21,32 +21,8 @@ const confirmedGone = async (probe, gapMs = PROBE_GAP_MS) => {
   }
   return true;
 };
-const readText = (file) => {
-  try {
-    return fs.readFileSync(file, 'utf8');
-  } catch {
-    return null;
-  }
-};
-
 function processTable() {
-  const rows = [];
-  for (const entry of fs.readdirSync('/proc')) {
-    if (!/^\d+$/.test(entry)) continue;
-    const stat = readText(`/proc/${entry}/stat`);
-    if (stat === null) continue;
-    const [state, ppid] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    const statm = readText(`/proc/${entry}/statm`);
-    rows.push({
-      pid: Number(entry),
-      ppid: Number(ppid),
-      state,
-      rssKb: statm ? Number(statm.split(' ')[1]) * 4 : 0,
-      cmd: (readText(`/proc/${entry}/cmdline`) ?? '').replaceAll('\0', ' '),
-      env: readText(`/proc/${entry}/environ`) ?? '',
-    });
-  }
-  return rows;
+  return processRows();
 }
 
 function projectProcs(proj) {

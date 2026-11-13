@@ -4,6 +4,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { finishTest, mcpSession, sleep } = require('./support.cjs');
+const { isAlive } = require('./procs.cjs');
 
 const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-close-refusals-'));
 const STATE = path.join(PROJ, '.playwriter');
@@ -39,14 +40,6 @@ const waitFor = async (check, ms) => {
   }
   return null;
 };
-const alive = (pid) => {
-  try {
-    const state = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]?.[0];
-    return state !== undefined && state !== 'Z' && state !== 'X';
-  } catch {
-    return false;
-  }
-};
 const logLength = () => fs.readFileSync(GATE_LOG, 'utf8').length;
 const logSince = (mark) => fs.readFileSync(GATE_LOG, 'utf8').slice(mark);
 const count = (text, pattern) => (text.match(pattern) ?? []).length;
@@ -74,7 +67,7 @@ const close = async (gate, query) => JSON.parse((await request('POST', gate, `/_
     assert.equal(wrongPid.closed, false, 'a close for a pid that is not this project browser is refused');
     assert.equal(wrongPid.pid, browserPid, 'the refusal names this project browser');
     assert.equal(wrongPid.reason, `pid ${process.pid} is not this project's browser, which is pid ${browserPid}`, 'the refusal names the pid it was asked for and the browser it is');
-    assert.equal(alive(browserPid), true, `browser pid ${browserPid} is still running after the refused close`);
+    assert.equal(isAlive(browserPid), true, `browser pid ${browserPid} is still running after the refused close`);
     assert.equal((await request('GET', debug, '/json/version', 5000)).status, 200, 'the debug port still answers after the refused close');
     assert.equal(count(logSince(mark), /stopping browser/g), 0, 'the refused close did not stop the browser');
     console.log(`close-refusals: ok: a close for pid ${process.pid} was refused; browser pid ${browserPid} kept: ${wrongPid.reason}`);
@@ -90,7 +83,7 @@ const close = async (gate, query) => JSON.parse((await request('POST', gate, `/_
     assert.equal(otherLease.reason, '1 other lease(s) held', 'the refusal counts the other lease');
     assert.equal(otherLease.leases.length, 1, 'the refusal lists exactly the other lease');
     assert.equal(otherLease.leases[0].pid, process.pid, 'the listed lease is the other holder, not the MCP session');
-    assert.equal(alive(browserPid), true, `browser pid ${browserPid} is still running after the refused close`);
+    assert.equal(isAlive(browserPid), true, `browser pid ${browserPid} is still running after the refused close`);
     assert.equal((await request('GET', debug, '/json/version', 5000)).status, 200, 'the debug port still answers after the refused close');
     assert.equal(count(logSince(mark), /stopping browser/g), 0, 'the refused close did not stop the browser');
     console.log(`close-refusals: ok: a close with another lease held was refused; browser pid ${browserPid} kept: ${otherLease.reason}`);

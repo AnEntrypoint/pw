@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { ROOT } = require('./support.cjs');
+const { isAlive } = require('./procs.cjs');
 
 const RUNNER = path.join(ROOT, 'scripts', 'phase-b.cjs');
 const LEAK = "node -e \"const c=require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},120000)'],{stdio:'ignore'});c.unref();require('node:fs').writeFileSync(process.env.LEAK_PID_FILE,String(c.pid))\"";
@@ -11,14 +12,6 @@ const LEAK = "node -e \"const c=require('node:child_process').spawn(process.exec
 const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pw-phase-b-'));
 const runner = (logDir, specs, flags = []) => spawnSync(process.execPath, [RUNNER, ...flags, logDir, ...specs], { encoding: 'utf8', timeout: 120000 });
 const resultOf = (logDir) => fs.readFileSync(path.join(logDir, 'result.txt'), 'utf8');
-const alive = (pid) => {
-  try {
-    const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return raw.slice(raw.lastIndexOf(')') + 2, raw.lastIndexOf(')') + 3) !== 'Z';
-  } catch {
-    return false;
-  }
-};
 
 (async () => {
   const red = scratch();
@@ -36,7 +29,7 @@ const alive = (pid) => {
   assert.equal(leakRun.status, 1, leakRun.stderr);
   assert.match(resultOf(leak), /leak exit 0 wall \d+ ms leftover 1 effective 1/);
   const leaked = Number(fs.readFileSync(pidFile, 'utf8'));
-  assert.equal(alive(leaked), false, `the process left behind by the row (${leaked}) is stopped`);
+  assert.equal(isAlive(leaked), false, `the process left behind by the row (${leaked}) is stopped`);
   console.log(`ok 2: a row that leaves process ${leaked} behind makes the runner exit ${leakRun.status}, and the process is stopped`);
 
   const watched = scratch();

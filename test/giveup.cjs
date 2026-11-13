@@ -4,6 +4,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { finishTest, mcpSession, sleep } = require('./support.cjs');
+const { isAlive } = require('./procs.cjs');
 
 const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-giveup-'));
 const STATE = path.join(PROJ, '.playwriter');
@@ -38,17 +39,6 @@ const waitFor = async (check, ms) => {
     await sleep(200);
   }
   return null;
-};
-const alive = (pid) => {
-  const state = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]?.[0];
-  return state !== undefined && state !== 'Z' && state !== 'X';
-};
-const aliveNow = (pid) => {
-  try {
-    return alive(pid);
-  } catch {
-    return false;
-  }
 };
 const count = (text, pattern) => (text.match(pattern) ?? []).length;
 
@@ -93,12 +83,12 @@ const resume = () => {
     const text = fs.readFileSync(GATE_LOG, 'utf8').slice(mark);
     const giveUps = count(text, /went away after 3 failed probes/g);
     if (giveUps > 0) {
-      assert.equal(aliveNow(pid), false, `a browser survived a give-up: pid ${pid} is alive after the gate gave up`);
+      assert.equal(isAlive(pid), false, `a browser survived a give-up: pid ${pid} is alive after the gate gave up`);
       assert.match(text, new RegExp(`went away after 3 failed probes; pid ${pid} is dead`), `the gate gave up on pid ${pid} and did not name it as dead`);
     }
     assert.equal(during.status, 200, 'the request made during the stop is answered');
     assert.equal(count(fs.readFileSync(GATE_LOG, 'utf8'), /browser started pid=/g), 1, 'the browser is started once');
-    console.log(`giveup: ok: ${giveUps} give-up(s) during the stop; the browser pid ${pid} is ${aliveNow(pid) ? 'alive and kept' : 'dead after its give-up'}`);
+    console.log(`giveup: ok: ${giveUps} give-up(s) during the stop; the browser pid ${pid} is ${isAlive(pid) ? 'alive and kept' : 'dead after its give-up'}`);
 
     lease.destroy();
     await session.end();
