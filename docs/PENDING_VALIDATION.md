@@ -750,3 +750,31 @@ Not covered here.
 - The relay branch (stopping relays started during the run) runs only when the test starts a relay. On this machine relay pid 88264 was already listening on 19988, so the CLI reused it and the branch did not run. The hosted runner starts with no relay, so the windows-scan is what exercises that branch.
 - `finishTest` is still blind on win32 (`envOf` returns `''`), so it checks nothing on Windows. `releaseDirectory` is the check that works there.
 - Nothing ran on Windows here. The Windows lifecycle row runs only on the hosted windows-scan, after the owner's go.
+
+## Phase B on ef87762: the EBUSY fix, its witnesses and the full set (green; not pushed)
+
+Build. `node --check` passed for `bin/playwriter-project`, `test/support.cjs`, `test/lifecycle.cjs`, `test/teardown-hold.cjs`, `test/adopted-refusal.cjs` and `test/commandof-win32.cjs`; `package.json` parses. These ran on the working tree before the commit. The tree did not change after that (clean at `ef87762`), so the results apply to `ef87762`.
+
+Witnesses, green, on `ef87762`:
+- `test/teardown-hold.cjs`: exit 0; four `ok` lines and `teardown-hold: all checks passed`. Full set wall 10383 ms.
+- `test/commandof-win32.cjs`: exit 0; six `ok` lines and `commandof-win32: all checks passed`. Full set wall 131 ms.
+- `test/adopted-refusal.cjs`: exit 0; `adopted-refusal: all checks passed`. Full set wall 9731 ms.
+- `test/lifecycle.cjs`, alone on Linux: exit 0; `lifecycle: 12 checks passed`.
+
+Red controls. Each is a temporary edit, restored from a saved copy and checked with `cmp`. Each exits 1.
+- A. `teardown-hold.cjs`, wait skipped (`while (false) {` in `releaseDirectory`): `teardown-hold: FAILED: the holder exits by itself, so the teardown waits for it and stops nothing`. The holder was signalled instead of waited for.
+- B. `commandof-win32.cjs`, `commandOf` rethrows instead of returning `''` on a PowerShell failure: `commandof-win32: FAILED: rethrown`.
+- C. `commandof-win32.cjs`, win32 branch without `.trim()`: `commandof-win32: FAILED: the command line of one pid comes back trimmed, with the CRLF PowerShell prints removed`.
+- D. `adopted-refusal.cjs`, the line-626 refusal removed from `bin/playwriter-project`: `adopted-refusal: FAILED: the refusal says why`. The witness's browser was gone afterwards (checked by pid).
+
+Full set, once, on `ef87762` (runner log `/tmp/tmp.8eEOTQnQOy`; wrapper output `/tmp/pwb-ebusy-fs/run`, with `.summary` and `.samples`). Runner exit 0, wall 855424 ms. 28 of 28 rows exit 0, leftover 0 on every row. Rows with wall in ms: npm-test 339852; f1 7676; orphan 30096; mode 4769; memory 96150; phase-b 17731; start-refusal 6169; signal 1671; stale-replace 5676; stale-held 6928; stale-unanswering 18555; stale-nosandbox 28877; lifecycle-nosandbox 57277; lifecycle-forced-check11 44358; lifecycle-forced-cleanup 55362; stale-foreign 3449; callprobe 14322; negative-control 13776; live-browser 25698; executor-direct 1140; executor-headless 1139; giveup 25274; close-noop 15567; close-refusals 10062; platform-listing 1637; adopted-refusal 9731; commandof-win32 131; teardown-hold 10383.
+
+Longest step: the `npm-test` row, 339852 ms of the 855424 ms run. Nothing was changed to shorten it. The new teardown adds at most one bounded 30 s wait per lifecycle run, and the lifecycle rows here took 57277 ms and 55362 ms, against 55121 ms and 55179 ms in the 88eee15 record.
+
+Load note. The sampler took a sample every 15 s; every sample up to 03:52:42 shows 0 busy-loop processes. The wrapper's last `after` line counted 257 `while :; do :; done` processes and a 1-minute load of 44.41. Those processes were not in any earlier sample, and `ps` showed 0 busy loops when checked afterwards. `watch.jsonl` records gm-role processes exiting at 03:52:55, with `gm-job` commands. It does not show the busy loops, so their owner is not confirmed. No row's log contains the busy-loop text. Nothing was stopped, because the run did not start them.
+
+Not covered here.
+- The relay branch of `lifecycle.cjs` (stopping relays the run started) did not run. Relay pid 88264 was already listening on 19988, so the CLI reused it and the branch had nothing to stop. Pid 88264 was not touched.
+- No Windows run happened here. The hosted windows-scan is the first run of the Windows lifecycle row since `d79445a`, and it is not started.
+
+Push. Not pushed. `origin/main` is `d79445a`. Local commits not on origin: `4ccd13d` (item 4), `df77f9d` (item 5), `ef87762` (the EBUSY fix) and this record. The push is held for the owner's approval of a third push, and the dispatcher's go is needed. Nothing was run on hosted Actions.
