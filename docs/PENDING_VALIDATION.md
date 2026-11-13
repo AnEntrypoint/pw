@@ -492,3 +492,18 @@ Host and peers: another session's busy loops were on the host during the full se
 - Longest step: the full-set runner, 736376 ms. Its longest row was npm-test, 305155 ms.
 
 Limit: the start-refusal failure did not reproduce on the fixed launcher in the runs here, and the control reproduces the window with a stand-in gate, not the real resolver. The control is the witness for the mechanism; the real rate is unmeasured.
+
+## Single-probe negatives outside the lifecycle runs, and the ranked remaining work (33006d8; Phase A)
+
+Ranked remaining reachable work after 33006d8:
+
+1. Started here: the two single-probe negatives outside the lifecycle runs. `test/leases.cjs` `stopped` counted a live browser as retired after one timed-out debug-port probe, and `test/orphan.cjs` `answering` could clear a live browser the same way. Both now use `confirmedGone` from `test/support.cjs`: three consecutive misses one second apart. The lifecycle witness and the red control take the same helper, so there is one copy.
+2. Owner's decision, not started: the gate treats three failed probes as the browser having gone, and drops its state while Chrome may still run (the note above, line 315). Whether a slow browser should count as gone is a design question.
+3. Retry semantics, not started: after a failed browser start, the gate's `ensureChrome` keeps no memory of the refusal, so any later request starts a browser again. The start command no longer does this (ec9f326), but an MCP client that calls `execute` after a failed start still would. Changing it changes what a retry means.
+4. Watch only: item 1, the 19:25:34Z probe failure, stays open until it recurs. The start refusal's real rate is unmeasured: the control reproduces the window with a stand-in gate.
+
+Excluded: owner-held (the sandboxed launch, the `--no-sandbox` fallback, F1 and the upstream send, deleting `/tmp/pw-test-*`, the consumer pin in `docs/CONSUMERS.md`); gm's kill path in `browser_scope.cpp`; the Windows and macOS scans and item 5, which need other hosts.
+
+Changes, each a local commit as lanmower with no trailers: c535dd6 (`test/support.cjs`: `confirmedGone`, `GONE_AFTER_PROBES`, `PROBE_GAP_MS`), 9a0d7d9 (`test/leases.cjs`: `stopped` uses `confirmedGone`), ea542b4 (`test/orphan.cjs`: `answering` is `!confirmedGone`), 23961af (`test/lifecycle.cjs` imports the helper), 083eb95 (`test/negative-control.cjs` imports the helper). The witnesses are in Phase B below.
+
+Phase B: pending.
