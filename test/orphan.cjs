@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { sleep, projectProcs, stopPids, mcpSession, WRAPPER } = require('./support.cjs');
+const { sleep, projectProcs, stopPids, mcpSession, WRAPPER, confirmedGone } = require('./support.cjs');
 
 const OPEN = "state.orphan = await context.newPage(); await state.orphan.goto('data:text/html,orphan-witness'); return 'opened'";
 const RESTART = "return 'restarted'";
@@ -48,7 +48,7 @@ async function scenario(name, dropPidFile) {
     assert.equal(adopted, false, name + ': the restarted gate owns the browser it adopted');
     await launcher.end(3000);
     counts.afterExit = await settle(proj, 40000);
-    exitState = { gates: gateCount(proj), answering: await answers(debug) };
+    exitState = { gates: gateCount(proj), answering: !(await confirmedGone(() => answers(debug))) };
   } finally {
     await stopPids(projectProcs(proj).map((row) => row.pid));
     fs.rmSync(proj, { recursive: true, force: true });
