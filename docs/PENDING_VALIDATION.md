@@ -412,3 +412,11 @@ Blocked on the host, not reachable here: the Windows browser scan and the browse
 Excluded, owner or gm: item 3 (sandboxed launch, needs the owner's host sandbox setting); the automatic `--no-sandbox` fallback (item 2, stays off); F1 and the upstream send (`docs/UPSTREAM_PLAYWRITER.md`, needs the owner's repro); deleting `/tmp/pw-test-*` (item 7); item 4's kill path in `browser_scope.cpp` (gm's repo); the consumer pin in `docs/CONSUMERS.md` (243db69, 68 commits behind at 36846ac; gm's `defaults/mcp.json` takes that pin, so the re-pin is gm's and the owner's).
 
 Phase A, d65edca: `test/stale.cjs` `DEFAULT_MODES` gains `foreign`, and the line that said foreign is not run by default is removed. Witness: the default `node test/stale.cjs` runs four modes, and `npm test` runs it.
+
+Phase B on 5424cab (code d65edca; docs 70eac54 and 5424cab; gm job pb-fullset-p3, `timeout 3300` on the runner, logdir /tmp/tmp.i9YJEnJWA9): the full set once, 17 rows. Runner exit 0, runner worst exit 0, wall 573023 ms, leftover 0 on every row.
+- Rows (exit, wall ms): npm-test 213058 (its chain runs the default stale mode, now with foreign); f1 7973; orphan 26536; mode 5034; memory 96414; phase-b 17824; start-refusal 6393; signal 1704; stale-replace 6049; stale-held 7400; stale-unanswering 18603; stale-nosandbox 29876 (the default `node test/stale.cjs`, four modes); lifecycle-nosandbox 41472; lifecycle-forced-check11 34728; lifecycle-forced-cleanup 41702; stale-foreign 3501; callprobe 14293. All exit 0.
+- The default stale run now prints the foreign check: `ok: a process on the gate port that is not this project gate is not signalled, and no lease is taken on it`, then `stale: all checks passed` (`stale-nosandbox.log`). The npm-test log has the same line.
+- Forced witnesses keep their directories by design: `/tmp/pw-test-qkgbEe` (check11) and `/tmp/pw-test-t0xi5Y` (cleanup).
+- After the run: no process of these runs is left, gm's gate pid 1180507 is alive and untouched, and nothing listens on port 2531.
+- Longest step: the full-set runner, 573023 ms (9 min 33 s). Its longest row was npm-test, 213058 ms.
+- The top reachable item, the foreign witness in the default stale run, is done. Items 1 and 4 stay open.
