@@ -476,4 +476,19 @@ Control (e916d84, `test/start-poll.cjs`, not in the npm test chain; scripts `sta
 - `ready` mode: the stand-in answers 200 at 2.5 s, which is a browser that comes up slowly.
 - Both modes require exactly one browser start and one readiness request, and their own exit and output. Pre-fix `019e683` in `refuse` mode must fail with two starts; the fixed launcher in `ready` mode must start once and report `browser ready`.
 
-Phase B: pending, recorded below with the host load and any busy loops in each run.
+Phase B on ec9f326 (fix) and e916d84 (control), full set on d06ca28: green.
+
+Build: pw has no build step. `node --check bin/playwriter-project` and `node --check test/start-poll.cjs` passed.
+
+Host and peers: another session's busy loops were on the host during the full set. They are the loaded witness `sh /tmp/pb10/loaded.sh 3` (parent PID 1974122, 14 pairs of `timeout 200 sh -c 'while :; do :; done'`). Samples show them at 00:52:30 to 00:53:01, 00:54:46 to 00:57:02, and 01:03:18 to the end of the run, with none between. This work did not start or stop them. The 560 s bound in the brief is not in that script; each loop is bounded at 200 s.
+
+- Red control, pre-fix 019e683 (from a `git archive` copy in /tmp/pwb-prefix), `node test/start-poll.cjs refuse /tmp/pwb-prefix/bin/playwriter-project`, host load 17.02, 28 peer loops: exit 1, 4616 ms. Output: `start-poll refuse: FAILED: the browser is started once and one readiness request reaches the gate (2 starts, 2 readiness requests)`, and the launcher says `browser failed: browser refused to start: no usable sandbox`.
+- Green, fixed ec9f326, `node test/start-poll.cjs ready`, host load 18.22, 28 peer loops: exit 0, 2782 ms. Output: `start-poll ready: launcher exit 0; 1 browser start(s); 1 readiness request(s)`, the launcher says `browser ready (profile ...)`, and `start-poll: all checks passed`.
+- Refuse mode on the fixed launcher: exit 0 (the control passes), 2791 ms, `launcher exit 1; 1 browser start(s); 1 readiness request(s)`.
+- `start-refusal` alone, three runs, host load 19.41, 20.90 and 20.83 with 28 peer loops: 3 of 3 pass, 9002, 8536 and 7561 ms.
+- `start-refusal` under twelve busy loops of mine (PIDs 1957073 to 1957084, stopped by PID, 0 of 12 alive after), three runs, host load 18.06 to 18.93: 3 of 3 pass, 7672, 7527 and 7841 ms.
+- `npm test` alone on the fixed launcher: exit 0, 266365 ms, `start: all checks passed`. Host load 17.45 to 18.65; the peer loops appeared at 00:50:53 and stayed. The earlier alone run on the pre-fix launcher passed at 243841 ms on a quiet host.
+- Full set on d06ca28 (logdir /tmp/tmp.jsSjyepgXQ, result.txt there): runner exit 0, wall 736376 ms, worst exit 0, leftover 0 on every row. Rows (exit, wall ms): npm-test 305155; f1 8111; orphan 27219; mode 5281; memory 96692; phase-b 17757; start-refusal 6305; signal 1691; stale-replace 5716; stale-held 7093; stale-unanswering 18557; stale-nosandbox 29167; lifecycle-nosandbox 55582; lifecycle-forced-check11 44582; lifecycle-forced-cleanup 65490; stale-foreign 3918; callprobe 18220; negative-control 19169.
+- Longest step: the full-set runner, 736376 ms. Its longest row was npm-test, 305155 ms.
+
+Limit: the start-refusal failure did not reproduce on the fixed launcher in the runs here, and the control reproduces the window with a stand-in gate, not the real resolver. The control is the witness for the mechanism; the real rate is unmeasured.
