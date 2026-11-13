@@ -189,13 +189,12 @@ async function foreign() {
 }
 
 const MODES = { replace, held, unanswering, foreign };
-const DEFAULT_MODES = ['replace', 'held', 'unanswering'];
+const DEFAULT_MODES = ['replace', 'held', 'unanswering', 'foreign'];
 
 (async () => {
   const requested = process.argv[2];
   if (requested !== undefined && !(requested in MODES)) throw new Error(`unknown mode ${requested}; use one of ${Object.keys(MODES).join(', ')}`);
   for (const mode of requested ? [requested] : DEFAULT_MODES) await MODES[mode]();
-  if (requested === undefined) console.log('stale: foreign is not run by default; run node test/stale.cjs foreign');
   await finishTest('stale');
   console.log('stale: all checks passed');
 })().catch(async (error) => {
