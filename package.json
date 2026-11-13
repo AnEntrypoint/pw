@@ -25,6 +25,8 @@
     "signal": "node test/signal.cjs",
     "callprobe": "node test/callprobe.cjs",
     "negative-control": "node test/negative-control.cjs",
+    "start-poll-refuse": "node test/start-poll.cjs refuse",
+    "start-poll-ready": "node test/start-poll.cjs ready",
     "lifecycle-forced-check11": "node test/lifecycle-forced.cjs check11",
     "lifecycle-forced-cleanup": "node test/lifecycle-forced.cjs cleanup"
   },
