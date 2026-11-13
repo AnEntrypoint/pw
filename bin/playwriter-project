@@ -1228,7 +1228,7 @@ async function main(argv) {
     const outcome = answer.status === 200
       ? { ready: true }
       : { ready: false, reason: gateFailureSince(from) ?? (timedOut ? `no answer on port ${ports.gate} within ${START_DEADLINE_MS / 1000} s` : answer.error ?? `HTTP ${answer.status}`) };
-    console.error(outcome.ready ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed: ${outcome.reason}`);
+    console.error(outcome.ready ? `playwriter-project: browser ready (profile ${PROFILE})` : `playwriter-project: browser failed: ${outcome.reason}; gate log ${GATE_LOG}`);
     if (outcome.ready) await httpGet(ports.gate, `/__pwp/hold?ms=${IDLE_MS}`, 2000);
     lease.destroy();
     process.exit(outcome.ready ? 0 : 1);

@@ -40,7 +40,9 @@ async function run(name) {
     assert.equal(result.status, 1, `${name}: start fails: ${result.stdout}${result.stderr}`);
     assert.match(result.stderr, expect, `${name}: start reports the gate's reason`);
     assert.ok(elapsed < BUDGET_MS, `${name}: start returns in ${elapsed} ms, within ${BUDGET_MS} ms`);
-    const gateLog = fs.readFileSync(path.join(proj, '.playwriter', 'gate.log'), 'utf8');
+    const logPath = path.join(proj, '.playwriter', 'gate.log');
+    assert.ok(result.stderr.includes(logPath), `${name}: the failure output names the gate log ${logPath}`);
+    const gateLog = fs.readFileSync(logPath, 'utf8');
     assert.match(gateLog, /browser start failed: /, `${name}: the gate logs the failure`);
     assert.equal((gateLog.match(/browser started pid=/g) ?? []).length, 1, `${name}: the browser is started once, not on each probe`);
     console.log(`ok ${name}: start returns in ${elapsed} ms with the gate's reason; the browser is started once`);
