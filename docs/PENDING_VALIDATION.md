@@ -638,3 +638,11 @@ This record is docs-only and comes after the run; the tree the run tested is `91
 The commits this stretch carries to `origin main` in one fast-forward from `607018e`: `6ea2696` (the Windows `commandOf` fix), `9b565f3` (its record), `dd2fdcd` (the `closeFromCaller` fix), `82d098f` (its record), `91141ef` (the no-op witness), and this record.
 
 Hosted witness: the `windows-scan` run for this push is the Windows witness for line 197 of `test/lifecycle.cjs`. Its result is recorded only if it has finished when this push is reported; it is not polled.
+
+## 607018e windows-scan (run 43351541230): the dispatcher's reading, recorded without a push
+
+Read once by the dispatcher and recorded as given. I did not re-read the log and did not poll the run.
+
+- PowerShell 7 is on the hosted `windows-latest` runner: the Lifecycle step runs under `C:\Program Files\PowerShell\7\pwsh.EXE`. The Lifecycle step has no `shell:` key (`.github/workflows/windows-scan.yml` lines 19 to 20), so it runs under the runner's default Windows shell, which is pwsh.
+- The failure is the same symptom as before the fix: the debug port still answers after the close (`debug-port /json/version` last "ok", ok x52). `607018e` is before `6ea2696`, so this is the pre-fix behaviour.
+- So `6ea2696` is the candidate fix for that symptom. The windows-scan for `d13cede` decides it, at line 197 of `test/lifecycle.cjs` (`the debug port stops answering after the close`).
