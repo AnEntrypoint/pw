@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { sleep, projectProcs, mcpSession, finishTest } = require('./support.cjs');
+const { sleep, projectProcs, mcpSession, finishTest, confirmedGone } = require('./support.cjs');
 
 const DEADLINE_MS = 10000;
 const OPEN = "state.page ??= await context.newPage(); return 'open'";
@@ -14,7 +14,7 @@ const browsers = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('
 const children = (proj) => projectProcs(proj).filter((row) => row.cmd.includes('playwriter/bin.js')).length;
 const debugPort = (proj) => Number(fs.readFileSync(path.join(proj, '.playwriter', 'debug-port'), 'utf8'));
 const answers = (port) => fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
-const stopped = async (proj, port) => gates(proj) === 0 && browsers(proj) === 0 && !(await answers(port));
+const stopped = async (proj, port) => gates(proj) === 0 && browsers(proj) === 0 && (await confirmedGone(() => answers(port)));
 const retired = async (proj, port) => stopped(proj, port) && children(proj) === 0;
 
 async function waitFor(check, ms) {
