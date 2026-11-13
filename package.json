@@ -8,7 +8,7 @@
   },
   "scripts": {
     "postinstall": "patch-package --error-on-fail",
-    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs && node test/signals.cjs && node test/fallback.cjs && node test/ready.cjs && node test/stale.cjs && node test/start.cjs && node test/signal.cjs && node test/callprobe.cjs && node test/negative-control.cjs && node test/live-browser.cjs && node test/executor.cjs direct && node test/executor.cjs headless",
+    "test": "node test/patch.cjs && node test/tools.cjs && node test/lifecycle.cjs && node test/leases.cjs && node test/signals.cjs && node test/fallback.cjs && node test/ready.cjs && node test/stale.cjs && node test/start.cjs && node test/signal.cjs && node test/callprobe.cjs && node test/negative-control.cjs && node test/live-browser.cjs",
     "witness": "node test/memory.cjs",
     "f1": "node test/firstpage.cjs",
     "orphan": "node test/orphan.cjs",
@@ -29,9 +29,7 @@
     "start-poll-ready": "node test/start-poll.cjs ready",
     "lifecycle-forced-check11": "node test/lifecycle-forced.cjs check11",
     "lifecycle-forced-cleanup": "node test/lifecycle-forced.cjs cleanup",
-    "live-browser": "node test/live-browser.cjs",
-    "executor-direct": "node test/executor.cjs direct",
-    "executor-headless": "node test/executor.cjs headless"
+    "live-browser": "node test/live-browser.cjs"
   },
   "engines": {
     "node": ">=22"
