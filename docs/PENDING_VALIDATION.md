@@ -595,3 +595,18 @@ Effect of gm's stop of gate pid 1180507 at about 02:02Z. The pid is gm's gate: g
 Correction to the premise in the request: leases does not print the ECONNREFUSED probe lines (0 in each rep). Only lifecycle does, plus the one executor-direct line described above.
 
 gm run tools: not used in this stretch. `next_context` on the active run `b8bdb4` returned that run unchanged (another task). I did not start a new run, since that would have replaced it.
+
+## Windows lifecycle close, hosted run 43342269597 on 33006d8: the cause and a local fix (Phase A; no build, no witness run, no push)
+
+Cause. `commandOf` (`bin/playwriter-project`, line 274) reads a process's command line from `/proc` on Linux and runs `ps` everywhere else. Windows has no `ps`, so the call throws and `commandOf` returns `''` (the catch, line 281 before the fix). `ownedBrowserPids` (line 538) keeps a candidate pid only when `commandOf(pid).includes('--user-data-dir=' + PROFILE)`, so on Windows it keeps none. `stopChrome` (line 554) then returns `forgetBrowser()` at line 557, before `closeBrowser()` at line 559: no `Browser.close` is sent, and nothing is signalled. The browser keeps running and the gate forgets it. `closeFromCaller` (line 622) returns `{closed: true, pid}` at line 631 whatever `stopChrome` did, so the tool reports success.
+
+The failing check. `test/lifecycle.cjs` line 196 (`closed.closed.length === 1`) passed, then line 197 (`the debug port stops answering after the close`) polled the debug port for 10 s and found it answering. The hosted log matches: `debug-port /json/version: last "ok"`, with 52 answers, and `checks passed before the failure: 5`. The stop was skipped, so this is the browser staying up, not a probe fault. This stretch did not change the cause: the `commandOf` branch predates it, and the run for 33006d8 predates the stretch.
+
+Fix (local commit `6ea2696`, not pushed). `commandOf` on `win32` reads the command line with `powershell.exe -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Process -Filter "ProcessId=N").CommandLine"`, with a 10 s timeout. The ownership check, `ownedBrowserPids`, `stopChrome` and `closeFromCaller` are unchanged, so a reused pid still cannot be stopped by mistake. The change is three lines. It has not been syntax-checked with `node --check`, because this phase is no-build; that check is part of the witness below.
+
+Witness needed before any push (not run here; the Windows part needs the hosted runner):
+- Windows host: `node test/lifecycle.cjs` must pass `the debug port stops answering after the close` (line 197), which means the browser is closed by the browsers tool and not just forgotten.
+- Linux regression: `node --check bin/playwriter-project`, then `node test/lifecycle.cjs` alone. The Linux path is unchanged, so this must stay green.
+- Risk to watch: on Windows each `commandOf` call starts PowerShell, which takes roughly a second. `stopChrome` polls `ownedBrowserPids` in `waitFor` loops with 10 s and 5 s budgets, so a stop may take longer on Windows; the 10 s per-call timeout bounds each call.
+
+Related defect, not fixed in this phase. `closeFromCaller` returns `{closed: true}` (line 631) even when `stopChrome` stopped nothing. The tool reports success while the browser runs. The fix belongs in a follow-up: return `closed: true` only after the debug port stops answering, and `closed: false` with the reason otherwise.
