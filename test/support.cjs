@@ -12,6 +12,15 @@ process.env.PLAYWRITER_NO_SANDBOX = '1';
 const TOKEN_MARK = `PWP_TEST_TOKEN=${TOKEN}\0`;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const GONE_AFTER_PROBES = 3;
+const PROBE_GAP_MS = 1000;
+const confirmedGone = async (probe, gapMs = PROBE_GAP_MS) => {
+  for (let miss = 1; miss <= GONE_AFTER_PROBES; miss += 1) {
+    if (await probe()) return false;
+    if (miss < GONE_AFTER_PROBES) await sleep(gapMs);
+  }
+  return true;
+};
 const readText = (file) => {
   try {
     return fs.readFileSync(file, 'utf8');
@@ -183,4 +192,4 @@ function mcpSession(proj, env = {}) {
   };
 }
 
-module.exports = { ROOT, WRAPPER, TOKEN, sleep, processTable, projectProcs, label, summarize, stopPids, alive, finishTest, ownedRows, mcpSession };
+module.exports = { ROOT, WRAPPER, TOKEN, sleep, GONE_AFTER_PROBES, PROBE_GAP_MS, confirmedGone, processTable, projectProcs, label, summarize, stopPids, alive, finishTest, ownedRows, mcpSession };
