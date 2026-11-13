@@ -506,4 +506,18 @@ Excluded: owner-held (the sandboxed launch, the `--no-sandbox` fallback, F1 and 
 
 Changes, each a local commit as lanmower with no trailers: c535dd6 (`test/support.cjs`: `confirmedGone`, `GONE_AFTER_PROBES`, `PROBE_GAP_MS`), 9a0d7d9 (`test/leases.cjs`: `stopped` uses `confirmedGone`), ea542b4 (`test/orphan.cjs`: `answering` is `!confirmedGone`), 23961af (`test/lifecycle.cjs` imports the helper), 083eb95 (`test/negative-control.cjs` imports the helper). The witnesses are in Phase B below.
 
-Phase B: pending.
+Phase B on df54652: green. Build: pw has no build step; `node --check` passed for test/support.cjs, test/leases.cjs, test/orphan.cjs, test/lifecycle.cjs and test/negative-control.cjs.
+
+Witnesses, each run once unless marked, with the host load and peer loops at the time (logdir /tmp/pwb-item1-xcfxXf):
+- `node test/leases.cjs` alone: exit 0, 92337 ms, `leases: all checks passed`. Host after: load 6.40, no busy loops.
+- `npm run orphan` alone: exit 0, 30859 ms. Both rows: `restarted gate owns browser: true; gates after exit: 0; browser answers /json/version after exit: false` (pid file kept, 15377 ms; pid file dropped, 15315 ms).
+- `node test/lifecycle.cjs` alone: exit 0, 63397 ms, `lifecycle: 12 checks passed`. Host had 28 peer busy loops.
+- `npm run negative-control` alone: exit 0, 18247 ms. The red control FAILED as designed (the single probe reads the stopped browser as gone), and `confirmed check: ok ... not reported gone after 3 missed probes`, then `negative-control: all checks passed`.
+- `node test/leases.cjs` under twelve busy loops of mine (PIDs 2064359 2064360 2064361 2064362 2064363 2064365 2064377 2064378 2064379 2064381 2064382 2064383; stopped by PID, 0 of 12 alive after): exit 0, 108964 ms, `leases: all checks passed`. Host load 18.86 before, 29.09 after; 52 busy-loop processes at the start (28 peers, 24 mine).
+- `npm run orphan` under the same twelve loops: exit 0, 39421 ms, both rows green as above (20397 ms and 18667 ms).
+
+Full set once on df54652 (logdir /tmp/tmp.3FlKSVyytg): runner exit 0, wall 730753 ms, worst exit 0, leftover 0 on every row. Rows (exit, wall ms): npm-test 278993; f1 14602; orphan 47061; mode 10502; memory 100150; phase-b 17784; start-refusal 6410; signal 1716; stale-replace 5804; stale-held 7153; stale-unanswering 18561; stale-nosandbox 29407; lifecycle-nosandbox 57588; lifecycle-forced-check11 46630; lifecycle-forced-cleanup 55828; stale-foreign 3488; callprobe 14323; negative-control 14106.
+
+Host and peers during the full set: 28 busy-loop processes from other sessions were sampled at 01:15:08 to 01:16:38, 01:18:09 to 01:18:24, 01:18:39 to 01:20:55, and 01:26:56 to the end. The owner's note names gm's loops and fx's Phase B job; I did not check their owners myself. Host load ranged from 3.90 to 23.84 across the samples. None of these processes was started or stopped by this work.
+
+Longest step: the full-set runner, 730753 ms. Its longest row was npm-test, 278993 ms.
