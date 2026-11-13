@@ -631,4 +631,10 @@ Green, run alone on the tree that adds this witness: exit 0, wall 15207 ms. Outp
 
 Red control. The launcher before the fix (`9b565f3`) was put in `bin/` for one run, and HEAD was restored (`git diff --stat -- bin/` is empty afterwards). Result: exit 1, `close-noop: FAILED: a stop that leaves the browser running is reported as not closed`, with `true !== false`. The old code reported the no-op as closed, so the witness fails on the defect and passes on the fix.
 
-The full-set result for this tree is recorded in the next record commit.
+Full set on `91141ef` (the tree with the witness, run once): runner exit 0, wall 791025 ms, worst exit 0, 24 of 24 rows exit 0, leftover 0 on every row. The row list is the 22 rows of the earlier full set plus `close-noop`. Longest row: `npm-test`, 310272 ms; the longest step of the run is that row. `close-noop` took 15331 ms. Host during the run: busy-loop processes 0 before and after; 1-minute load 2.67 before, 2.73 after. Logs: `/tmp/pwb-final-fullset` (rows), `/tmp/pwb-final-fullset.samples`, logdir `/tmp/tmp.3PObORypRB`.
+
+This record is docs-only and comes after the run; the tree the run tested is `91141ef`.
+
+The commits this stretch carries to `origin main` in one fast-forward from `607018e`: `6ea2696` (the Windows `commandOf` fix), `9b565f3` (its record), `dd2fdcd` (the `closeFromCaller` fix), `82d098f` (its record), `91141ef` (the no-op witness), and this record.
+
+Hosted witness: the `windows-scan` run for this push is the Windows witness for line 197 of `test/lifecycle.cjs`. Its result is recorded only if it has finished when this push is reported; it is not polled.
