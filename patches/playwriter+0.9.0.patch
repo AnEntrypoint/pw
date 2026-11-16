@@ -1,8 +1,30 @@
 diff --git a/node_modules/playwriter/dist/executor.js b/node_modules/playwriter/dist/executor.js
-index 7cafd7c..c2109f8 100644
+index 7cafd7c..e0c7251 100644
 --- a/node_modules/playwriter/dist/executor.js
 +++ b/node_modules/playwriter/dist/executor.js
-@@ -713,6 +713,23 @@ export class PlaywrightExecutor {
+@@ -302,6 +302,21 @@ export function isPlaywrightChannelOwner(value) {
+         typeof value._guid === 'string' &&
+         value._connection !== undefined);
+ }
++export function chromiumLaunchArgs() {
++    const raw = process.env.PLAYWRITER_CHROMIUM_ARGS;
++    if (raw === undefined || raw === '') return {};
++    let args;
++    try {
++        args = JSON.parse(raw);
++    }
++    catch (error) {
++        throw new Error(`PLAYWRITER_CHROMIUM_ARGS is not valid JSON: ${error.message}`);
++    }
++    if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) {
++        throw new Error('PLAYWRITER_CHROMIUM_ARGS must be a JSON array of strings');
++    }
++    return { args };
++}
+ export class PlaywrightExecutor {
+     isConnected = false;
+     browser = null;
+@@ -713,6 +728,23 @@ export class PlaywrightExecutor {
      isHeadlessMode() {
          return !!this.cdpConfig.headless;
      }
@@ -26,7 +48,7 @@ index 7cafd7c..c2109f8 100644
      /**
       * Connect to Chrome and set up the context. Shared by ensureConnection and reset.
       * Never opens a tab: the sandbox has no default page, code creates or picks its own.
-@@ -733,8 +750,7 @@ export class PlaywrightExecutor {
+@@ -733,8 +765,7 @@ export class PlaywrightExecutor {
                  this.logger.log('Browser disconnected, clearing connection state');
                  this.clearConnectionState();
              });
@@ -36,7 +58,7 @@ index 7cafd7c..c2109f8 100644
              context.setDefaultTimeout(60000);
              context.setDefaultNavigationTimeout(10000);
              context.on('page', (page) => {
-@@ -760,8 +776,7 @@ export class PlaywrightExecutor {
+@@ -760,8 +791,7 @@ export class PlaywrightExecutor {
              this.logger.log('Browser disconnected, clearing connection state');
              this.clearConnectionState();
          });
@@ -46,11 +68,41 @@ index 7cafd7c..c2109f8 100644
          // Action timeout (click, fill, hover, etc.) is longer to tolerate slower
          // SPA/Turbo navigations and post-click settling on real sites.
          // Navigation timeout (goto, reload) remains separate.
+@@ -815,6 +845,7 @@ export class PlaywrightExecutor {
+             const browser = await chromium.launch({
+                 headless: true,
+                 executablePath,
++                ...chromiumLaunchArgs(),
+             });
+             browser.on('disconnected', () => {
+                 if (PlaywrightExecutor._sharedHeadlessBrowser !== browser) {
 diff --git a/node_modules/playwriter/src/executor.ts b/node_modules/playwriter/src/executor.ts
-index a99244c..85d7987 100644
+index a99244c..b9f7196 100644
 --- a/node_modules/playwriter/src/executor.ts
 +++ b/node_modules/playwriter/src/executor.ts
-@@ -946,6 +946,23 @@ export class PlaywrightExecutor {
+@@ -450,6 +450,21 @@ export function isPlaywrightChannelOwner(value: any): boolean {
+   )
+ }
+ 
++export function chromiumLaunchArgs(): { args?: string[] } {
++  const raw = process.env.PLAYWRITER_CHROMIUM_ARGS
++  if (raw === undefined || raw === '') return {}
++  let args: unknown
++  try {
++    args = JSON.parse(raw)
++  } catch (error) {
++    throw new Error(`PLAYWRITER_CHROMIUM_ARGS is not valid JSON: ${(error as Error).message}`)
++  }
++  if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) {
++    throw new Error('PLAYWRITER_CHROMIUM_ARGS must be a JSON array of strings')
++  }
++  return { args }
++}
++
+ export class PlaywrightExecutor {
+   private isConnected = false
+   private browser: Browser | null = null
+@@ -946,6 +961,23 @@ export class PlaywrightExecutor {
      return !!this.cdpConfig.headless
    }
  
@@ -74,7 +126,7 @@ index a99244c..85d7987 100644
    /**
     * Connect to Chrome and set up the context. Shared by ensureConnection and reset.
     * Never opens a tab: the sandbox has no default page, code creates or picks its own.
-@@ -969,8 +986,7 @@ export class PlaywrightExecutor {
+@@ -969,8 +1001,7 @@ export class PlaywrightExecutor {
          this.clearConnectionState()
        })
  
@@ -84,7 +136,7 @@ index a99244c..85d7987 100644
  
        context.setDefaultTimeout(60000)
        context.setDefaultNavigationTimeout(10000)
-@@ -1006,8 +1022,7 @@ export class PlaywrightExecutor {
+@@ -1006,8 +1037,7 @@ export class PlaywrightExecutor {
        this.clearConnectionState()
      })
  
@@ -94,3 +146,11 @@ index a99244c..85d7987 100644
  
      // Action timeout (click, fill, hover, etc.) is longer to tolerate slower
      // SPA/Turbo navigations and post-click settling on real sites.
+@@ -1075,6 +1105,7 @@ export class PlaywrightExecutor {
+       const browser = await chromium.launch({
+         headless: true,
+         executablePath,
++        ...chromiumLaunchArgs(),
+       })
+ 
+       browser.on('disconnected', () => {
