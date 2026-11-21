@@ -39,6 +39,8 @@ const CHROME_TRIMS = [
   '--process-per-site',
   '--renderer-process-limit=1',
 ];
+const CHROMIUM_ARGS_VARIABLE = 'PLAYWRITER_CHROMIUM_ARGS';
+const GPU_ENABLING_FLAGS = ['--enable-unsafe-webgpu', '--use-vulkan', '--use-angle', '--use-gl', '--enable-gpu'];
 const IDLE_CHECK_MS = 2000;
 const GONE_AFTER_PROBES = 3;
 const PROBE_RETRY_MS = 1000;
@@ -48,19 +50,38 @@ const HOP_BY_HOP = ['connection', 'keep-alive', 'transfer-encoding', 'content-le
 const INIT_ID = 'pwp-init';
 const MCP_TOOLS = require('../lib/mcp-tools.json');
 
-function findUp(start, name) {
+function findUp(start, names) {
   for (let dir = start; ; dir = path.dirname(dir)) {
-    if (fs.existsSync(path.join(dir, name))) return dir;
+    if (names.some((name) => fs.existsSync(path.join(dir, name)))) return dir;
     if (path.dirname(dir) === dir) return null;
   }
 }
 
 function projectRoot(cwd) {
   if (process.env.PLAYWRITER_PROJECT_DIR) return path.resolve(process.env.PLAYWRITER_PROJECT_DIR);
-  return findUp(cwd, '.playwriter') || findUp(cwd, '.git') || cwd;
+  return findUp(cwd, ['.playwriter', '.git']) || cwd;
 }
 
 const PROJECT = projectRoot(process.cwd());
+const PROJECT_SOURCE = process.env.PLAYWRITER_PROJECT_SOURCE || (process.env.PLAYWRITER_PROJECT_DIR ? 'PLAYWRITER_PROJECT_DIR' : 'cwd');
+
+function chromiumArgs() {
+  const raw = process.env[CHROMIUM_ARGS_VARIABLE];
+  if (raw === undefined || raw === '') return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${CHROMIUM_ARGS_VARIABLE} is not valid JSON (${error.message}); expected an array of strings such as ["--enable-unsafe-webgpu"]`);
+  }
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string' || item === '')) {
+    throw new Error(`${CHROMIUM_ARGS_VARIABLE} must be a JSON array of non-empty strings, got ${raw}`);
+  }
+  return parsed;
+}
+
+const enablesGpu = (flags) => flags.some((flag) => GPU_ENABLING_FLAGS.some((enabling) => flag === enabling || flag.startsWith(enabling + '=')));
+const cwdInsideProject = () => process.cwd() === PROJECT || process.cwd().startsWith(PROJECT + path.sep);
 const STATE = path.join(PROJECT, '.playwriter');
 const PROFILE = path.join(STATE, 'browser-profile');
 const GATE_LOG = path.join(STATE, 'gate.log');
@@ -80,6 +101,7 @@ const USAGE = [
   'install:    npx -y add-mcp "npx -y github:AnEntrypoint/pw" -n playwriter --all -g -y',
   'env:        PLAYWRITER_PROJECT_DIR (default: nearest ancestor of cwd with .playwriter, else with .git, else cwd),',
   '            PLAYWRITER_BROWSER_PATH, PLAYWRITER_NO_SANDBOX=1,',
+  '            PLAYWRITER_CHROMIUM_ARGS (a JSON array of extra browser arguments; GPU-enabling ones keep the GPU on),',
   '            PLAYWRITER_WEBGPU=1 turns on the WebGPU labs in this project profile before Chromium starts, fresh or not,',
   `            PLAYWRITER_IDLE_MS (default ${IDLE_MS}: browser stops after this long with no traffic)`,
 ].join('\n');
@@ -426,10 +448,12 @@ function runGate({ gate, debug }) {
       '--no-default-browser-check',
       ...CHROME_TRIMS,
     ];
-    if (process.env.PLAYWRITER_WEBGPU !== '1') args.push('--disable-gpu');
+    const extra = chromiumArgs();
+    if (process.env.PLAYWRITER_WEBGPU !== '1' && !enablesGpu(extra)) args.push('--disable-gpu');
     if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) args.push('--headless=new');
     if (process.env.PLAYWRITER_NO_SANDBOX) args.push('--no-sandbox');
-    args.push('about:blank');
+    args.push(...extra, 'about:blank');
+    if (extra.length > 0) log(`browser flags applied from ${CHROMIUM_ARGS_VARIABLE}: ${extra.join(' ')}`);
     fs.appendFileSync(BROWSER_LOG, '');
     const from = fs.statSync(BROWSER_LOG).size;
     const out = fs.openSync(BROWSER_LOG, 'a');
@@ -812,7 +836,7 @@ function runGate({ gate, debug }) {
   });
   server.listen(gate, HOST, () => {
     log(`gate on ${gate}, browser debug port ${debug}, idle ${IDLE_MS}ms`);
-    log(`gate pid=${process.pid}`);
+    log(`gate pid=${process.pid} project ${PROJECT} from ${PROJECT_SOURCE}`);
   });
   setInterval(() => {
     tick().catch((error) => log(`tick failed: ${error.message}`));
@@ -833,7 +857,7 @@ async function ensureGate(port) {
     cwd: PROJECT,
     detached: true,
     stdio: ['ignore', out, out],
-    env: { ...process.env, PLAYWRITER_PROJECT_DIR: PROJECT },
+    env: { ...process.env, PLAYWRITER_PROJECT_DIR: PROJECT, PLAYWRITER_PROJECT_SOURCE: PROJECT_SOURCE },
   });
   gate.unref();
   fs.closeSync(out);
@@ -1205,7 +1229,9 @@ async function main(argv) {
   if (argv[0] === 'help' || argv[0] === '--help') return console.log(USAGE);
   if (argv[0] === 'status') return status(argv.includes('--json'));
 
+  chromiumArgs();
   const ports = await loadPorts();
+  if (!cwdInsideProject()) log(`project ${PROJECT} comes from ${PROJECT_SOURCE}; the working directory ${process.cwd()} is outside it`);
   const base = `${HOST}:${ports.gate}`;
   const direct = `ws://${base}/devtools/browser/`;
 
